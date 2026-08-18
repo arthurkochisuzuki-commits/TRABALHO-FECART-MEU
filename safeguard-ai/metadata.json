@@ -1,0 +1,6 @@
+{
+  "name": "SafeGuard AI",
+  "description": "Sistema avançado de monitoramento e vigilância com IA, reconhecimento facial YOLOv8 e gestão de moradores.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
