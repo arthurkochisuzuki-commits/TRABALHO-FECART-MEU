@@ -45,6 +45,9 @@ class SecureVisionApp {
    * Bloqueia F12, atalhos do DevTools, Exibir Código-Fonte (Ctrl+U) e Botão Direito (Inspecionar)
    */
   setupKioskSecurityLockdown() {
+    let lastKioskBlockTime = 0;
+    const KIOSK_BLOCK_DEBOUNCE_MS = 1500; // Delay mínimo de 1.5 segundos entre notificações
+
     // 1. Bloqueio de Teclas de Atalho de Inspeção
     window.addEventListener('keydown', (e) => {
       const isF12 = e.key === 'F12' || e.keyCode === 123;
@@ -58,12 +61,14 @@ class SecureVisionApp {
         e.preventDefault();
         e.stopPropagation();
         
-        if (window.svDB) {
-          window.svDB.addLog('DANGER', 'ACESSO DEVTOOLS BLOQUEADO', 'Tentativa não autorizada de abrir ferramentas de inspeção (F12/DevTools) bloqueada pelo sistema.', 'KIOSK');
+        const now = Date.now();
+        if (now - lastKioskBlockTime >= KIOSK_BLOCK_DEBOUNCE_MS) {
+          lastKioskBlockTime = now;
+          if (window.svDB) {
+            window.svDB.addLog('DANGER', 'BLOQUEIO DE DEVTOOLS', 'Tentativa de inspeção (F12 / Console) bloqueada pelo sistema.', 'KIOSK');
+          }
+          this.speakVoiceNotification('Acesso ao console de desenvolvedor bloqueado por políticas de segurança.', 'f12_blocked');
         }
-        
-        // Notificação de bloqueio
-        this.speakVoiceNotification('Acesso ao console de desenvolvedor bloqueado por políticas de segurança.', 'f12_blocked');
         return false;
       }
     }, true);

@@ -9,6 +9,9 @@
   <!-- Kiosk Security & Anti-DevTools Active Shield (F12 / Console / Inspection Blocker) -->
   <script>
     (function() {
+      var lastBlockLogTime = 0;
+      var BLOCK_COOLDOWN_MS = 1200; // Delay mínimo de 1.2 segundos entre registros
+
       // 1. Bloqueio Imediato de Teclas (F12, Ctrl+Shift+I/J/C, Ctrl+U, Ctrl+S)
       function blockInspectionKeys(e) {
         var key = e.key || '';
@@ -25,17 +28,20 @@
           e.preventDefault();
           e.stopPropagation();
           e.stopImmediatePropagation();
-          if (window.svDB && window.svDB.addLog) {
-            window.svDB.addLog('DANGER', 'BLOQUEIO DE DEVTOOLS', 'Tentativa de inspeção (F12 / Console) bloqueada pelo sistema.', 'KIOSK');
+
+          var now = Date.now();
+          if (now - lastBlockLogTime >= BLOCK_COOLDOWN_MS) {
+            lastBlockLogTime = now;
+            if (window.svDB && window.svDB.addLog) {
+              window.svDB.addLog('DANGER', 'BLOQUEIO DE DEVTOOLS', 'Tentativa de inspeção (F12 / Console) bloqueada pelo sistema.', 'KIOSK');
+            }
           }
           return false;
         }
       }
 
       window.addEventListener('keydown', blockInspectionKeys, true);
-      window.addEventListener('keyup', blockInspectionKeys, true);
       document.addEventListener('keydown', blockInspectionKeys, true);
-      document.addEventListener('keyup', blockInspectionKeys, true);
 
       // 2. Bloqueio de Botão Direito e Arrastar Elementos
       window.addEventListener('contextmenu', function(e) {
