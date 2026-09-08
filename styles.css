@@ -760,14 +760,39 @@ body {
 
 .media-source-preview {
   display: flex;
-  gap: 10px;
-  margin-top: 8px;
+  gap: 8px;
+  margin-top: 6px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 4px 10px 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-cyan) rgba(15, 23, 42, 0.6);
+  flex-shrink: 0;
+}
+
+.media-source-preview::-webkit-scrollbar {
+  height: 6px;
+}
+
+.media-source-preview::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.6);
+  border-radius: 4px;
+}
+
+.media-source-preview::-webkit-scrollbar-thumb {
+  background: var(--accent-cyan);
+  border-radius: 4px;
 }
 
 .media-thumb {
-  width: 70px;
-  height: 70px;
-  border: 1px dashed var(--border-color);
+  width: 64px;
+  height: 64px;
+  min-width: 64px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-color);
   border-radius: 6px;
   display: flex;
   align-items: center;
@@ -775,12 +800,46 @@ body {
   background: #080d1a;
   overflow: hidden;
   position: relative;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.media-thumb:hover {
+  border-color: var(--accent-cyan);
+  transform: scale(1.05);
 }
 
 .media-thumb img, .media-thumb video {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* Burst Photo Mode Active Effect */
+.btn-action.active-burst {
+  background: #0284c7 !important;
+  box-shadow: 0 0 14px rgba(6, 182, 212, 0.7) !important;
+  transform: scale(0.96);
+}
+
+/* Toggle Video Recording Active Pulse */
+.btn-outline.recording-pulse {
+  background: rgba(239, 68, 68, 0.2) !important;
+  border-color: #ef4444 !important;
+  color: #ff4d4f !important;
+  font-weight: 700 !important;
+  animation: pulseRecording 1.2s infinite ease-in-out;
+}
+
+@keyframes pulseRecording {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
 }
 
 /* Tabs inside enrollment or settings */
@@ -911,12 +970,6 @@ body {
   background: rgba(239,68,68,0.15);
   color: #f87171;
   border: 1px solid rgba(239,68,68,0.3);
-}
-.timeline-event .tl-badge.spoof {
-  background: rgba(239,68,68,0.25);
-  color: #ff4d4f;
-  border: 1px solid #ef4444;
-  font-weight: 800;
 }
 .timeline-event .tl-badge.paused {
   background: rgba(100,116,139,0.15);
