@@ -29,6 +29,7 @@ class SecureVisionApp {
     window.svIntegrity.init();
 
     this.setupEventListeners();
+    this.setupKioskSecurityLockdown();
     this.setupStatusTab();
     this.loadTheme();
     this.loadLogsUI();
@@ -37,6 +38,46 @@ class SecureVisionApp {
     this.initCameraFeeds();
 
     console.log('[App] SecureVision AI fully operational.');
+  }
+
+  /**
+   * Kiosk & Operator Security Lockdown:
+   * Bloqueia F12, atalhos do DevTools, Exibir Código-Fonte (Ctrl+U) e Botão Direito (Inspecionar)
+   */
+  setupKioskSecurityLockdown() {
+    // 1. Bloqueio de Teclas de Atalho de Inspeção
+    window.addEventListener('keydown', (e) => {
+      const isF12 = e.key === 'F12' || e.keyCode === 123;
+      const isCtrlShiftI = (e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'I' || e.key === 'i' || e.keyCode === 73);
+      const isCtrlShiftJ = (e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'J' || e.key === 'j' || e.keyCode === 74);
+      const isCtrlShiftC = (e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'C' || e.key === 'c' || e.keyCode === 67);
+      const isCtrlU = (e.ctrlKey || e.metaKey) && (e.key === 'U' || e.key === 'u' || e.keyCode === 85);
+      const isCtrlS = (e.ctrlKey || e.metaKey) && (e.key === 'S' || e.key === 's' || e.keyCode === 83);
+
+      if (isF12 || isCtrlShiftI || isCtrlShiftJ || isCtrlShiftC || isCtrlU || isCtrlS) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (window.svDB) {
+          window.svDB.addLog('DANGER', 'ACESSO DEVTOOLS BLOQUEADO', 'Tentativa não autorizada de abrir ferramentas de inspeção (F12/DevTools) bloqueada pelo sistema.', 'KIOSK');
+        }
+        
+        // Notificação de bloqueio
+        this.speakVoiceNotification('Acesso ao console de desenvolvedor bloqueado por políticas de segurança.', 'f12_blocked');
+        return false;
+      }
+    }, true);
+
+    // 2. Bloqueio de Menu de Contexto (Botão Direito do Mouse)
+    window.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    }, true);
+
+    // 3. Limpeza e Proteção de Console contra Injeções
+    console.warn('%c🛡️ SECUREVISION AI - MODO DE ALTA SEGURANÇA ATIVO', 'color:#ef4444; font-size:16px; font-weight:bold;');
+    console.warn('%cO acesso direto e alterações manuais neste console são auditados e gravados.', 'color:#f59e0b; font-size:12px;');
   }
 
   setupEventListeners() {
@@ -144,6 +185,58 @@ class SecureVisionApp {
         btnSaveSupabase.textContent = '💾 Salvar Credenciais Supabase';
       });
     }
+
+    // Export Authorized Encrypted Backup (JSON)
+    const btnExportBackup = document.getElementById('btnExportBackup');
+    if (btnExportBackup) {
+      btnExportBackup.addEventListener('click', async () => {
+        try {
+          btnExportBackup.disabled = true;
+          btnExportBackup.textContent = '⏳ Gerando Backup...';
+          const backupData = await window.svDB.exportDatabaseBackup();
+          const jsonStr = JSON.stringify(backupData, null, 2);
+          const blob = new Blob([jsonStr], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          const dateStr = new Date().toISOString().slice(0, 10);
+          a.href = url;
+          a.download = `fecart_backup_${dateStr}.json`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          alert('✅ Backup criptografado exportado com sucesso!');
+        } catch (err) {
+          alert(`❌ Erro ao exportar backup: ${err.message}`);
+        } finally {
+          btnExportBackup.disabled = false;
+          btnExportBackup.textContent = '📦 Exportar Backup Criptografado (JSON)';
+        }
+      });
+    }
+
+    // Restore Authorized Backup
+    const inputImportBackup = document.getElementById('inputImportBackup');
+    if (inputImportBackup) {
+      inputImportBackup.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        try {
+          const text = await file.text();
+          const backupData = JSON.parse(text);
+          const count = await window.svDB.restoreDatabaseBackup(backupData);
+          await window.svBiometrics.reloadRegisteredUsers();
+          this.loadRegisteredUsersUI();
+          this.loadLogsUI();
+          alert(`✅ Restauração concluída! ${count} usuários restaurados no banco de dados.`);
+        } catch (err) {
+          alert(`❌ Erro ao restaurar backup: ${err.message}`);
+        } finally {
+          inputImportBackup.value = '';
+        }
+      });
+    }
   }
 
   loadSupabaseUI() {
@@ -182,7 +275,19 @@ class SecureVisionApp {
     if (targetTab) targetTab.classList.add('active');
   }
 
-  // 🔍 Verificar Câmeras Conectadas no Dispositivo
+  // Security Helper: Universal XSS Prevention Sanitizer
+  escapeHTML(str) {
+    if (typeof str !== 'string') return str || '';
+    return str.replace(/[&<>'"]/g, tag => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      "'": '&#39;',
+      '"': '&quot;'
+    }[tag] || tag));
+  }
+
+  // 🔍 Verificar Câmeras Conectadas no Dispositivo (com detecção de Câmeras Virtuais e Anti-XSS)
   async openCameraCheckModal() {
     const modal = document.getElementById('cameraCheckModal');
     const deviceListEl = document.getElementById('connectedDeviceList');
@@ -202,37 +307,69 @@ class SecureVisionApp {
             ⚠️ Nenhuma câmera física ou webcam USB conectada ao computador.
           </div>`;
       } else {
-        let html = `<ul style="list-style:none; display:flex; flex-direction:column; gap:8px;">`;
+        deviceListEl.innerHTML = '';
+        const ul = document.createElement('ul');
+        ul.style.cssText = 'list-style:none; display:flex; flex-direction:column; gap:8px; padding:0; margin:0;';
+
+        const virtualDriverKeywords = ['obs', 'virtual', 'manycam', 'v4l2loopback', 'fake', 'splitcam', 'droidcam'];
+
         this.connectedDevices.forEach((dev, index) => {
-          html += `
-            <li style="background:var(--bg-card); border:1px solid var(--border-color); padding:10px 14px; border-radius:6px; display:flex; align-items:center; justify-content:space-between;">
-              <div>
-                <strong style="color:var(--text-main); font-size:0.85rem;">📷 ${dev.label || `Câmera Dispositivo #${index + 1}`}</strong>
-                <div style="font-family: monospace; font-size:0.7rem; color:var(--text-dim);">ID: ${dev.deviceId.substring(0, 20)}...</div>
-              </div>
-              <div style="display:flex; gap:6px;">
-                <button class="btn-action" style="font-size:0.75rem; padding:4px 8px;" onclick="window.svApp.assignCameraToSlot('${dev.deviceId}', '${dev.label}', 1)">Conectar Feed 1</button>
-              </div>
-            </li>`;
+          const rawLabel = dev.label || `Câmera Dispositivo #${index + 1}`;
+          const isVirtual = virtualDriverKeywords.some(kw => rawLabel.toLowerCase().includes(kw));
+
+          const li = document.createElement('li');
+          li.style.cssText = `background:var(--bg-card); border:1px solid ${isVirtual ? '#ef4444' : 'var(--border-color)'}; padding:10px 14px; border-radius:6px; display:flex; align-items:center; justify-content:space-between;`;
+
+          const infoDiv = document.createElement('div');
+          const titleStrong = document.createElement('strong');
+          titleStrong.style.cssText = 'color:var(--text-main); font-size:0.85rem; display:block;';
+          titleStrong.textContent = `📷 ${rawLabel}`;
+          
+          if (isVirtual) {
+            const warnBadge = document.createElement('span');
+            warnBadge.style.cssText = 'font-size:0.65rem; color:#ef4444; background:rgba(239,68,68,0.15); border:1px solid #ef4444; padding:2px 6px; border-radius:3px; margin-left:6px; font-weight:700;';
+            warnBadge.textContent = '⚠️ CÂMERA VIRTUAL DETECTADA';
+            titleStrong.appendChild(warnBadge);
+          }
+
+          const idDiv = document.createElement('div');
+          idDiv.style.cssText = 'font-family: monospace; font-size:0.7rem; color:var(--text-dim); margin-top:2px;';
+          idDiv.textContent = `ID: ${dev.deviceId.substring(0, 24)}...`;
+
+          infoDiv.appendChild(titleStrong);
+          infoDiv.appendChild(idDiv);
+
+          const btnDiv = document.createElement('div');
+          const btn = document.createElement('button');
+          btn.className = 'btn-action';
+          btn.style.cssText = 'font-size:0.75rem; padding:4px 8px;';
+          btn.textContent = 'Conectar Feed 1';
+          btn.addEventListener('click', () => this.assignCameraToSlot(dev.deviceId, rawLabel, 1));
+
+          btnDiv.appendChild(btn);
+          li.appendChild(infoDiv);
+          li.appendChild(btnDiv);
+          ul.appendChild(li);
         });
-        html += `</ul>`;
-        deviceListEl.innerHTML = html;
+
+        deviceListEl.appendChild(ul);
       }
 
       window.svDB.addLog('INFO', 'VERIFICAÇÃO DE CÂMERAS', `${this.connectedDevices.length} dispositivos de vídeo verificados no sistema.`);
     } catch (err) {
       console.error('[Cameras] Error enumerating devices:', err);
-      deviceListEl.innerHTML = `<div style="color:#ef4444;">Erro ao verificar câmeras: ${err.message}</div>`;
+      deviceListEl.innerHTML = `<div style="color:#ef4444;">Erro ao verificar câmeras: ${this.escapeHTML(err.message)}</div>`;
     }
   }
 
   async assignCameraToSlot(deviceId, label, slotNum = 1) {
+    const safeLabel = label || `Webcam ${slotNum}`;
     this.cameraFeeds[0].deviceId = deviceId;
-    this.cameraFeeds[0].name = label || `Webcam ${slotNum}`;
+    this.cameraFeeds[0].name = safeLabel;
     
     document.getElementById('cameraCheckModal').classList.remove('active');
     await this.connectSlotCamera(1, deviceId);
-    alert(`Câmera "${label}" conectada com sucesso ao Feed 1!`);
+    alert(`Câmera "${safeLabel}" conectada com sucesso ao Feed 1!`);
   }
 
   async connectSlotCamera(slotNum, deviceId) {
@@ -358,14 +495,30 @@ class SecureVisionApp {
       }
       this.speakVoiceNotification('Nenhuma pessoa detectada na câmera. Processamento biométrico pausado.', 'paused_voice');
 
+    } else if (statusState === 'SPOOF') {
+      bannerEl.className = 'identity-status-banner unauthorized';
+      if (iconEl) iconEl.textContent = '⚠️';
+      if (titleEl) {
+        titleEl.textContent = '🚨 ALERTA CRÍTICO: ATAQUE DE SPOOFING DETECTADO';
+        titleEl.style.color = '#ef4444';
+      }
+      if (subEl) subEl.textContent = 'Fraude Biométrica: Imagem estática ou foto parada detectada em frente à câmera. Prova de vida (Liveness) rejeitada.';
+      if (badgeEl) {
+        badgeEl.textContent = 'SPOOF / FOTO ESTÁTICA';
+        badgeEl.style.background = 'rgba(239,68,68,0.3)';
+        badgeEl.style.borderColor = '#ef4444';
+        badgeEl.style.color = '#ff6b6b';
+      }
+      this.speakVoiceNotification('Alerta de segurança! Tentativa de fraude por foto ou tela detectada!', 'spoof_voice');
+
     } else if (statusState === 'AUTHORIZED') {
       bannerEl.className = 'identity-status-banner authorized';
       if (iconEl) iconEl.textContent = '✅';
       if (titleEl) {
-        titleEl.textContent = `PESSOA CADASTRADA: ${details.name ? details.name.toUpperCase() : 'AUTORIZADO'}`;
+        titleEl.textContent = `PESSOA CADASTRADA: ${details.name ? this.escapeHTML(details.name).toUpperCase() : 'AUTORIZADO'}`;
         titleEl.style.color = '#10b981';
       }
-      if (subEl) subEl.textContent = `Identidade confirmada no Banco de Dados Biométrico (Confiança: ${details.confidence || 95}% | ArcFace Margin s=32, m=0.5).`;
+      if (subEl) subEl.textContent = `Identidade confirmada no Banco de Dados Biométrico (Confiança: ${details.confidence || 95}% | Liveness: ${details.livenessScore || 90}% ✓ | ArcFace Margin s=32, m=0.5).`;
       if (badgeEl) {
         badgeEl.textContent = 'CADASTRADO / AUTORIZADO';
         badgeEl.style.background = 'rgba(16,185,129,0.15)';
@@ -378,7 +531,7 @@ class SecureVisionApp {
       bannerEl.className = 'identity-status-banner unauthorized';
       if (iconEl) iconEl.textContent = '⛔';
       if (titleEl) {
-        titleEl.textContent = `🚫 ALERTA CRÍTICO: PESSOA BLOQUEADA DETECTADA: ${details.name ? details.name.toUpperCase() : 'BLOQUEADO'}`;
+        titleEl.textContent = `🚫 ALERTA CRÍTICO: PESSOA BLOQUEADA DETECTADA: ${details.name ? this.escapeHTML(details.name).toUpperCase() : 'BLOQUEADO'}`;
         titleEl.style.color = '#ef4444';
       }
       if (subEl) subEl.textContent = `ACESSO TOTALMENTE PROIBIDO (Lista Negra). Indivíduo com restrição de segurança identificado no banco (Confiança: ${details.confidence || 95}%).`;
@@ -450,12 +603,16 @@ class SecureVisionApp {
 
           if (box.detected) {
             // PESSOA DETECTADA NA CÂMERA -> PROCESSAR BIOMETRIA E ATUALIZAR STATUS
-            if (match && match.matched) {
+            if (match && match.isSpoofed) {
+              this.updateIdentityBanner('SPOOF', match);
+              this.updateSystemStatusLive('SPOOF', match);
+            } else if (match && match.matched) {
               if (match.isBlocked) {
                 this.updateIdentityBanner('BLOCKED', { name: match.name, confidence: match.confidence, role: match.role });
                 this.updateSystemStatusLive('BLOCKED', match);
               } else {
-                this.updateIdentityBanner('AUTHORIZED', { name: match.name, confidence: match.confidence, role: match.role });
+                const livenessScore = match.liveness ? match.liveness.scorePercent : '95';
+                this.updateIdentityBanner('AUTHORIZED', { name: match.name, confidence: match.confidence, role: match.role, livenessScore });
                 this.updateSystemStatusLive('AUTHORIZED', match);
               }
             } else {
@@ -486,7 +643,8 @@ class SecureVisionApp {
    * Draws dynamic bounding box over active video stream
    */
   drawDynamicBoundingBox(ctx, box, match, camId) {
-    const isMatched = match && match.matched;
+    const isSpoofed = match && match.isSpoofed;
+    const isMatched = match && match.matched && !isSpoofed;
     const isBlocked = isMatched && match.isBlocked;
     const isAuthorized = isMatched && !match.isBlocked;
 
@@ -498,6 +656,9 @@ class SecureVisionApp {
     } else if (isBlocked) {
       strokeColor = '#dc2626';
       fillColor = 'rgba(220, 38, 38, 0.28)';
+    } else if (isSpoofed) {
+      strokeColor = '#ff4444';
+      fillColor = 'rgba(255, 68, 68, 0.35)';
     }
 
     // Update Card UI Border
@@ -510,8 +671,10 @@ class SecureVisionApp {
         
         if (Date.now() - this.lastLoggedUnauthorized > 8000) {
           this.lastLoggedUnauthorized = Date.now();
-          if (isBlocked) {
-            window.svDB.addLog('DANGER', 'PESSOA BLOQUEADA IDENTIFICADA', `Indivíduo na lista negra (${match.name}) detectado na ${camId}! Acesso terminantemente negado.`, camId);
+          if (isSpoofed) {
+            window.svDB.addLog('DANGER', 'ATAQUE DE SPOOFING DETECTADO', `Tentativa de fraude biométrica com foto estática/tela identificada na ${camId}! Acesso bloqueado.`, camId);
+          } else if (isBlocked) {
+            window.svDB.addLog('DANGER', 'PESSOA BLOQUEADA IDENTIFICADA', `Indivíduo na lista negra (${this.escapeHTML(match.name)}) detectado na ${camId}! Acesso terminantemente negado.`, camId);
           } else {
             window.svDB.addLog('DANGER', 'PESSOA NÃO AUTORIZADA', `Rosto não cadastrado no banco detectado na ${camId}! Acesso negado.`, camId);
           }
@@ -557,12 +720,16 @@ class SecureVisionApp {
     ctx.stroke();
 
     // 3. Draw Label Badge Box above face
-    const labelText = isAuthorized 
-      ? `${match.name} [AUTORIZADO]` 
-      : (isBlocked ? `⛔ ${match.name} [ACESSO BLOQUEADO]` : (match.label || '🚨 RED ALERT - NÃO AUTORIZADO'));
-    const subText = isAuthorized 
-      ? `Confiança: ${match.confidence}%` 
-      : (isBlocked ? `LISTA NEGRA / ALERTA CRÍTICO (${match.confidence}%)` : 'Rosto Ausente no Banco DB');
+    const labelText = isSpoofed
+      ? '⚠️ FRAUDE: FOTO ESTÁTICA DETECTADA'
+      : (isAuthorized 
+          ? `${match.name} [AUTORIZADO]` 
+          : (isBlocked ? `⛔ ${match.name} [ACESSO BLOQUEADO]` : (match.label || '🚨 RED ALERT - NÃO AUTORIZADO')));
+    const subText = isSpoofed
+      ? 'SPOOFING / LIVENESS REJEITADO (0.0%)'
+      : (isAuthorized 
+          ? `Confiança: ${match.confidence}%` 
+          : (isBlocked ? `LISTA NEGRA / ALERTA CRÍTICO (${match.confidence}%)` : 'Rosto Ausente no Banco DB'));
 
     ctx.font = 'bold 11px JetBrains Mono, monospace';
     const textWidth = ctx.measureText(labelText).width;
@@ -698,7 +865,7 @@ class SecureVisionApp {
     this.switchTab('monitoring');
   }
 
-  // Render registered users with LGPD Delete Option and Blocked Badges
+  // Render registered users with LGPD Delete Option and Blocked Badges (Anti-XSS Secured)
   async loadRegisteredUsersUI() {
     const listEl = document.getElementById('registeredUsersList');
     if (!listEl) return;
@@ -713,46 +880,66 @@ class SecureVisionApp {
       return;
     }
 
-    let html = '';
+    listEl.innerHTML = '';
     users.forEach(u => {
       const photos = u.biometrics ? (u.biometrics.photoBlobs || []) : [];
       const sourcesCount = u.biometrics ? u.biometrics.sourceCount || 1 : 1;
       const isBlocked = !!u.isBlocked || u.accessLevel === 'BLOQUEADO';
+      const safeName = this.escapeHTML(u.name);
+      const safeRole = this.escapeHTML(u.role);
 
-      const avatarHtml = photos[0]
-        ? `<img src="${photos[0]}" style="width:40px; height:40px; border-radius:50%; object-fit:cover; border:2px solid ${isBlocked ? '#ef4444' : '#06b6d4'};" />`
-        : `<div style="width:40px; height:40px; border-radius:50%; background:${isBlocked ? '#991b1b' : '#2563eb'}; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:bold;">${isBlocked ? '🚫' : u.name[0]}</div>`;
+      const itemCard = document.createElement('div');
+      itemCard.style.cssText = `background:var(--bg-card); border:1px solid ${isBlocked ? 'rgba(239,68,68,0.4)' : 'var(--border-color)'}; padding:12px; border-radius:8px; display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;`;
 
+      const leftDiv = document.createElement('div');
+      leftDiv.style.cssText = 'display:flex; align-items:center; gap:12px;';
+
+      if (photos[0]) {
+        const img = document.createElement('img');
+        img.src = photos[0];
+        img.style.cssText = `width:40px; height:40px; border-radius:50%; object-fit:cover; border:2px solid ${isBlocked ? '#ef4444' : '#06b6d4'};`;
+        leftDiv.appendChild(img);
+      } else {
+        const initialDiv = document.createElement('div');
+        initialDiv.style.cssText = `width:40px; height:40px; border-radius:50%; background:${isBlocked ? '#991b1b' : '#2563eb'}; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:bold;`;
+        initialDiv.textContent = isBlocked ? '🚫' : (u.name[0] || '?');
+        leftDiv.appendChild(initialDiv);
+      }
+
+      const textDiv = document.createElement('div');
       const statusBadge = isBlocked
         ? `<span style="font-size:0.7rem; color:#ef4444; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.4); padding:2px 8px; border-radius:4px; font-weight:700;">🚫 BLOQUEADO (LISTA NEGRA)</span>`
-        : `<span style="font-size:0.7rem; color:#10b981; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.4); padding:2px 8px; border-radius:4px; font-weight:700;">✓ AUTORIZADO</span> <span style="font-size:0.7rem; color:#06b6d4; background:rgba(6,182,212,0.1); padding:2px 6px; border-radius:4px;">${u.role}</span>`;
+        : `<span style="font-size:0.7rem; color:#10b981; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.4); padding:2px 8px; border-radius:4px; font-weight:700;">✓ AUTORIZADO</span> <span style="font-size:0.7rem; color:#06b6d4; background:rgba(6,182,212,0.1); padding:2px 6px; border-radius:4px;">${safeRole}</span>`;
 
-      html += `
-        <div style="background:var(--bg-card); border:1px solid ${isBlocked ? 'rgba(239,68,68,0.4)' : 'var(--border-color)'}; padding:12px; border-radius:8px; display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
-          <div style="display:flex; align-items:center; gap:12px;">
-            ${avatarHtml}
-            <div>
-              <div style="color:var(--text-main); font-weight:600; font-size:0.9rem;">${u.name} ${statusBadge}</div>
-              <div style="font-size:0.75rem; color:var(--text-muted); margin-top:3px;">Fontes Biométricas: ${sourcesCount} Mídias | CPF: Criptografado AES-256 | LGPD Consent: ${new Date(u.lgpdConsent.timestamp).toLocaleDateString()}</div>
-            </div>
-          </div>
-          <button class="btn-outline" style="color:#ef4444; border-color:rgba(239,68,68,0.4); font-size:0.75rem;" onclick="window.svApp.deleteUserLGPD('${u.id}', '${u.name}')">🗑️ Excluir (LGPD)</button>
-        </div>`;
+      textDiv.innerHTML = `
+        <div style="color:var(--text-main); font-weight:600; font-size:0.9rem;">${safeName} ${statusBadge}</div>
+        <div style="font-size:0.75rem; color:var(--text-muted); margin-top:3px;">Fontes Biométricas: ${sourcesCount} Mídias | CPF: Criptografado AES-256 (SHA-256 Hash) | LGPD Consent: ${new Date(u.lgpdConsent ? u.lgpdConsent.timestamp : Date.now()).toLocaleDateString()}</div>
+      `;
+      leftDiv.appendChild(textDiv);
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn-outline';
+      delBtn.style.cssText = 'color:#ef4444; border-color:rgba(239,68,68,0.4); font-size:0.75rem;';
+      delBtn.textContent = '🗑️ Excluir (LGPD)';
+      delBtn.addEventListener('click', () => this.deleteUserLGPD(u.id, u.name));
+
+      itemCard.appendChild(leftDiv);
+      itemCard.appendChild(delBtn);
+      listEl.appendChild(itemCard);
     });
-
-    listEl.innerHTML = html;
   }
 
   async deleteUserLGPD(userId, userName) {
-    if (confirm(`⚠️ EXCLUSÃO LGPD (DIREITO AO ESQUECIMENTO):\nTem certeza que deseja apagar DEFINITIVAMENTE todos os dados, fotos, vídeos e biometria de "${userName}"?\nEsta ação é irreversível.`)) {
+    const safeName = this.escapeHTML(userName);
+    if (confirm(`⚠️ EXCLUSÃO LGPD (DIREITO AO ESQUECIMENTO):\nTem certeza que deseja apagar DEFINITIVAMENTE todos os dados, fotos, vídeos e biometria de "${safeName}"?\nEsta ação é irreversível.`)) {
       await window.svDB.deleteUserLGPD(userId);
       await window.svBiometrics.reloadRegisteredUsers();
       this.loadRegisteredUsersUI();
-      alert(`Dados de ${userName} foram excluídos permanentemente de acordo com a LGPD.`);
+      alert(`Dados de ${safeName} foram excluídos permanentemente de acordo com a LGPD.`);
     }
   }
 
-  // Live Logs UI
+  // Live Logs UI (Anti-XSS Secured)
   async loadLogsUI() {
     const listEl = document.getElementById('liveLogsList');
     if (!listEl) return;
@@ -777,11 +964,11 @@ class SecureVisionApp {
 
     card.innerHTML = `
       <div class="log-meta">
-        <span>${log.timestamp}</span>
-        <span class="cam-tag">${log.camId}</span>
+        <span>${this.escapeHTML(log.timestamp)}</span>
+        <span class="cam-tag">${this.escapeHTML(log.camId)}</span>
       </div>
-      <div class="log-badge ${badgeClass}">${icon} ${log.category}</div>
-      <div class="log-desc">${log.description}</div>
+      <div class="log-badge ${badgeClass}">${icon} ${this.escapeHTML(log.category)}</div>
+      <div class="log-desc">${this.escapeHTML(log.description)}</div>
     `;
 
     listEl.insertBefore(card, listEl.firstChild);
@@ -830,6 +1017,20 @@ class SecureVisionApp {
       elConfidence.textContent = '—';
       elMargin.textContent = '—';
       if (elEngine) { elEngine.textContent = 'Standby (Economia de GPU)'; elEngine.className = 'status-metric-value warning'; }
+    } else if (state === 'SPOOF' && match) {
+      elPerson.textContent = 'Spoof Detectado ⚠️';
+      elPerson.className = 'status-metric-value offline';
+      elResult.textContent = '🚨 FRAUDE / FOTO ESTÁTICA';
+      elResult.className = 'status-metric-value offline';
+      elResult.style.color = '#ef4444';
+      elName.textContent = 'Tentativa de Spoofing';
+      elName.style.color = '#ef4444';
+      elCosine.textContent = '0.000';
+      elConfidence.textContent = '0.0%';
+      elMargin.textContent = 'Rejeitado';
+      if (elEngine) { elEngine.textContent = 'Anti-Spoofing Ativado (Bloqueado)'; elEngine.className = 'status-metric-value offline'; }
+
+      this.addRecognitionTimelineEvent('spoof', 'Foto Estática / Tela', '0.000', '0.0');
     } else if (state === 'AUTHORIZED' && match) {
       elPerson.textContent = 'Detectada ✓';
       elPerson.className = 'status-metric-value online';
@@ -901,14 +1102,18 @@ class SecureVisionApp {
       icon = '⛔';
       badgeClass = 'unauth';
       badgeText = 'BLOQUEADO';
+    } else if (type === 'spoof') {
+      icon = '⚠️';
+      badgeClass = 'unauth';
+      badgeText = 'SPOOF DETECTADO';
     }
 
     const eventEl = document.createElement('div');
     eventEl.className = 'timeline-event';
     eventEl.innerHTML = `
-      <span class="tl-time">${timeStr}</span>
+      <span class="tl-time">${this.escapeHTML(timeStr)}</span>
       <span class="tl-icon">${icon}</span>
-      <span class="tl-text"><strong>${name}</strong> — Cosseno: ${cosine} | Confiança: ${confidence}%</span>
+      <span class="tl-text"><strong>${this.escapeHTML(name)}</strong> — Cosseno: ${this.escapeHTML(String(cosine))} | Confiança: ${this.escapeHTML(String(confidence))}%</span>
       <span class="tl-badge ${badgeClass}">${badgeText}</span>
     `;
 

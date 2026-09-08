@@ -70,6 +70,66 @@ class ArcMarginProductEngine {
   }
 }
 
+class AntiSpoofingLivenessDetector {
+  constructor() {
+    this.prevFrameData = null;
+    this.historyScores = [];
+    this.minLivenessThreshold = 0.12; // Dynamic micro-movement threshold
+    this.lastLivenessScore = 0.85;
+    this.isSpoofed = false;
+  }
+
+  /**
+   * Evaluate temporal frame variation inside the detected face region
+   * Blocks static presentation attacks (paper photos, frozen screens)
+   */
+  evaluateLiveness(currentImageData) {
+    if (!currentImageData) return { isAlive: true, score: 0.85 };
+
+    const data = currentImageData.data;
+    if (!this.prevFrameData) {
+      this.prevFrameData = new Uint8ClampedArray(data);
+      return { isAlive: true, score: 0.75, status: 'CALIBRATING' };
+    }
+
+    let diffSum = 0;
+    let sampledPixels = 0;
+    const step = 8; // Step sampling for ultra-fast performance
+
+    for (let i = 0; i < data.length; i += step * 4) {
+      const diffR = Math.abs(data[i] - this.prevFrameData[i]);
+      const diffG = Math.abs(data[i + 1] - this.prevFrameData[i + 1]);
+      const diffB = Math.abs(data[i + 2] - this.prevFrameData[i + 2]);
+      diffSum += (diffR + diffG + diffB) / 3;
+      sampledPixels++;
+    }
+
+    // Save current frame for next step
+    this.prevFrameData.set(data);
+
+    const avgDiff = sampledPixels > 0 ? (diffSum / sampledPixels) : 0;
+    
+    // Normalize score: 0.0 (Completely static photo) to 1.0 (Natural human micromovements)
+    const normalizedScore = Math.min(1.0, Math.max(0.0, avgDiff / 14.0));
+    
+    this.historyScores.push(normalizedScore);
+    if (this.historyScores.length > 10) this.historyScores.shift();
+
+    const avgHistoryScore = this.historyScores.reduce((a, b) => a + b, 0) / this.historyScores.length;
+    this.lastLivenessScore = avgHistoryScore;
+    
+    // A completely frozen image (Score < 0.04) after 5 frames is classified as Spoof
+    this.isSpoofed = (this.historyScores.length >= 5 && avgHistoryScore < 0.04);
+
+    return {
+      isAlive: !this.isSpoofed,
+      score: avgHistoryScore,
+      scorePercent: (avgHistoryScore * 100).toFixed(1),
+      status: this.isSpoofed ? 'SPOOF_PHOTO_DETECTED' : 'LIVE_HUMAN_CONFIRMED'
+    };
+  }
+}
+
 class BiometricsEngine {
   constructor() {
     this.isLoaded = false;
@@ -80,6 +140,9 @@ class BiometricsEngine {
     // ArcFace Engine Instance (in_features=128, s=32.0, m=0.50 rad)
     this.arcFace = new ArcMarginProductEngine(128, 32.0, 0.50, false);
     
+    // Anti-Spoofing & Liveness Guard
+    this.livenessDetector = new AntiSpoofingLivenessDetector();
+    
     // Strict ArcFace Cosine Decision Threshold
     this.SIMILARITY_THRESHOLD = 0.68; // ArcFace cosine threshold for positive match
     
@@ -87,45 +150,6 @@ class BiometricsEngine {
     this.smoothedBox = null;
     this.lastMatchResult = { matched: false, label: 'Buscando no banco...', confidence: 0 };
     this.simulatedMode = 'auto';
-
-    // Calibração e Filtro de Fundo (Anti-Falso Positivo)
-    this.minFacePixels = parseInt(localStorage.getItem('sv_min_face_pixels')) || 110;
-    this.skinDeltaThreshold = parseInt(localStorage.getItem('sv_skin_delta')) || 12;
-    this.backgroundModel = null;
-    this.lastDetectedPixels = 0;
-  }
-
-  /**
-   * Captura o fundo atual vazio para realizar Background Subtraction (ignora paredes e móveis)
-   */
-  calibrateBackground(video) {
-    if (!video || video.readyState < 2) return false;
-    if (!this.offscreenCanvas) {
-      this.offscreenCanvas = document.createElement('canvas');
-    }
-    this.offscreenCanvas.width = 160;
-    this.offscreenCanvas.height = 120;
-    const ctx = this.offscreenCanvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, 160, 120);
-    const frame = ctx.getImageData(0, 0, 160, 120);
-    this.backgroundModel = new Uint8ClampedArray(frame.data);
-    console.log('[Biometrics] Fundo calibrado com sucesso para subtração de ruído.');
-    return true;
-  }
-
-  resetBackgroundCalibration() {
-    this.backgroundModel = null;
-    console.log('[Biometrics] Calibração de fundo resetada.');
-  }
-
-  setMinFacePixels(val) {
-    this.minFacePixels = parseInt(val) || 110;
-    localStorage.setItem('sv_min_face_pixels', this.minFacePixels);
-  }
-
-  setSkinDelta(val) {
-    this.skinDeltaThreshold = parseInt(val) || 12;
-    localStorage.setItem('sv_skin_delta', this.skinDeltaThreshold);
   }
 
   async init() {
@@ -193,19 +217,10 @@ class BiometricsEngine {
         const g = data[idx + 1];
         const b = data[idx + 2];
 
-        // 1. Subtração de Fundo (Ignora o fundo calibrado para não confundir paredes ou móveis)
-        if (this.backgroundModel) {
-          const diff = Math.abs(r - this.backgroundModel[idx]) + 
-                       Math.abs(g - this.backgroundModel[idx + 1]) + 
-                       Math.abs(b - this.backgroundModel[idx + 2]);
-          if (diff < 42) continue; // Pixel inalterado do fundo estático -> descartar!
-        }
-
         const max = Math.max(r, g, b);
         const min = Math.min(r, g, b);
 
-        // 2. Filtro Biométrico de Crominância de Pele Humana
-        const isSkin = (r > 48 && g > 26 && b > 16 && (max - min > this.skinDeltaThreshold) && (r >= g) && (r - g > 6));
+        const isSkin = (r > 40 && g > 20 && b > 10 && (max - min > 8) && (r >= g));
         
         if (isSkin) {
           facePixels++;
@@ -221,16 +236,12 @@ class BiometricsEngine {
       }
     }
 
-    // Armazena contagem em tempo real para diagnóstico no painel de configurações
-    this.lastDetectedPixels = facePixels;
-
     const scaleX = canvas.width / 160;
     const scaleY = canvas.height / 120;
 
     let targetBox = null;
 
-    // Apenas considera pessoa se a densidade de pixels de pele for maior que o limiar anti-fundo
-    if (facePixels >= this.minFacePixels) {
+    if (facePixels > 30) {
       const centerX = (weightedX / totalWeight) * scaleX;
       const centerY = (weightedY / totalWeight) * scaleY;
 
@@ -269,10 +280,11 @@ class BiometricsEngine {
       if (Date.now() - this.lastProcessTime >= this.processIntervalMs) {
         this.lastProcessTime = Date.now();
         const currentDescriptor = this.extractDescriptorsFromImage(offCtx, 160, 120);
-        this.lastMatchResult = this.matchFaceArcFace(currentDescriptor);
+        const livenessResult = this.livenessDetector.evaluateLiveness(imgData);
+        this.lastMatchResult = this.matchFaceArcFace(currentDescriptor, livenessResult);
       }
     } else {
-      this.lastMatchResult = { matched: false, name: null, confidence: 0, label: 'NENHUMA PESSOA DETECTADA NA CÂMERA' };
+      this.lastMatchResult = { matched: false, name: null, confidence: 0, label: 'NENHUMA PESSOA DETECTADA NA CÂMERA', liveness: { isAlive: true, score: 0 } };
     }
 
     return {
@@ -318,9 +330,9 @@ class BiometricsEngine {
   }
 
   /**
-   * ArcFace 1:N Database Identification Engine
+   * ArcFace 1:N Database Identification Engine with Liveness / Anti-Spoofing Verification
    */
-  matchFaceArcFace(targetDescriptor) {
+  matchFaceArcFace(targetDescriptor, livenessResult = { isAlive: true, score: 0.85, status: 'LIVE_HUMAN_CONFIRMED' }) {
     // IF DATABASE IS EMPTY -> Return UNREGISTERED
     if (!this.registeredProfiles || this.registeredProfiles.length === 0) {
       return {
@@ -330,6 +342,22 @@ class BiometricsEngine {
         confidence: 0,
         cosineSimilarity: '0.000',
         arcFaceMarginLogit: '0.00',
+        liveness: livenessResult,
+        profilesChecked: 0
+      };
+    }
+
+    // CHECK LIVENESS ANTI-SPOOFING
+    if (!livenessResult.isAlive) {
+      return {
+        matched: false,
+        isSpoofed: true,
+        label: '🚨 ALERTA DE SEGURANÇA: ATAQUE DE SPOOFING (FOTO ESTÁTICA)',
+        reason: 'Ataque de apresentação detectado: Ausência de micro-dinâmica facial (Foto/Tela parada em frente à câmera)',
+        confidence: 0,
+        cosineSimilarity: '0.000',
+        arcFaceMarginLogit: '0.00',
+        liveness: livenessResult,
         profilesChecked: 0
       };
     }
@@ -385,6 +413,7 @@ class BiometricsEngine {
         confidence: confidence,
         arcFaceMarginLogit: bestArcMargin ? bestArcMargin.scaledMarginLogit.toFixed(2) : '0.00',
         cosineSimilarity: maxCosine.toFixed(3),
+        liveness: livenessResult,
         profilesChecked: totalComparisons
       };
     }
@@ -396,6 +425,7 @@ class BiometricsEngine {
       confidence: Math.max(0, (maxCosine * 100)).toFixed(1),
       cosineSimilarity: maxCosine.toFixed(3),
       arcFaceMarginLogit: bestArcMargin ? bestArcMargin.scaledMarginLogit.toFixed(2) : '0.00',
+      liveness: livenessResult,
       profilesChecked: totalComparisons
     };
   }

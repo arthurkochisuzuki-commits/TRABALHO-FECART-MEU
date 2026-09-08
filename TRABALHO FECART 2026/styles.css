@@ -912,6 +912,12 @@ body {
   color: #f87171;
   border: 1px solid rgba(239,68,68,0.3);
 }
+.timeline-event .tl-badge.spoof {
+  background: rgba(239,68,68,0.25);
+  color: #ff4d4f;
+  border: 1px solid #ef4444;
+  font-weight: 800;
+}
 .timeline-event .tl-badge.paused {
   background: rgba(100,116,139,0.15);
   color: #94a3b8;

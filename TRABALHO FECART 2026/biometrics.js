@@ -70,6 +70,66 @@ class ArcMarginProductEngine {
   }
 }
 
+class AntiSpoofingLivenessDetector {
+  constructor() {
+    this.prevFrameData = null;
+    this.historyScores = [];
+    this.minLivenessThreshold = 0.12; // Dynamic micro-movement threshold
+    this.lastLivenessScore = 0.85;
+    this.isSpoofed = false;
+  }
+
+  /**
+   * Evaluate temporal frame variation inside the detected face region
+   * Blocks static presentation attacks (paper photos, frozen screens)
+   */
+  evaluateLiveness(currentImageData) {
+    if (!currentImageData) return { isAlive: true, score: 0.85 };
+
+    const data = currentImageData.data;
+    if (!this.prevFrameData) {
+      this.prevFrameData = new Uint8ClampedArray(data);
+      return { isAlive: true, score: 0.75, status: 'CALIBRATING' };
+    }
+
+    let diffSum = 0;
+    let sampledPixels = 0;
+    const step = 8; // Step sampling for ultra-fast performance
+
+    for (let i = 0; i < data.length; i += step * 4) {
+      const diffR = Math.abs(data[i] - this.prevFrameData[i]);
+      const diffG = Math.abs(data[i + 1] - this.prevFrameData[i + 1]);
+      const diffB = Math.abs(data[i + 2] - this.prevFrameData[i + 2]);
+      diffSum += (diffR + diffG + diffB) / 3;
+      sampledPixels++;
+    }
+
+    // Save current frame for next step
+    this.prevFrameData.set(data);
+
+    const avgDiff = sampledPixels > 0 ? (diffSum / sampledPixels) : 0;
+    
+    // Normalize score: 0.0 (Completely static photo) to 1.0 (Natural human micromovements)
+    const normalizedScore = Math.min(1.0, Math.max(0.0, avgDiff / 14.0));
+    
+    this.historyScores.push(normalizedScore);
+    if (this.historyScores.length > 10) this.historyScores.shift();
+
+    const avgHistoryScore = this.historyScores.reduce((a, b) => a + b, 0) / this.historyScores.length;
+    this.lastLivenessScore = avgHistoryScore;
+    
+    // A completely frozen image (Score < 0.04) after 5 frames is classified as Spoof
+    this.isSpoofed = (this.historyScores.length >= 5 && avgHistoryScore < 0.04);
+
+    return {
+      isAlive: !this.isSpoofed,
+      score: avgHistoryScore,
+      scorePercent: (avgHistoryScore * 100).toFixed(1),
+      status: this.isSpoofed ? 'SPOOF_PHOTO_DETECTED' : 'LIVE_HUMAN_CONFIRMED'
+    };
+  }
+}
+
 class BiometricsEngine {
   constructor() {
     this.isLoaded = false;
@@ -79,6 +139,9 @@ class BiometricsEngine {
     
     // ArcFace Engine Instance (in_features=128, s=32.0, m=0.50 rad)
     this.arcFace = new ArcMarginProductEngine(128, 32.0, 0.50, false);
+    
+    // Anti-Spoofing & Liveness Guard
+    this.livenessDetector = new AntiSpoofingLivenessDetector();
     
     // Strict ArcFace Cosine Decision Threshold
     this.SIMILARITY_THRESHOLD = 0.68; // ArcFace cosine threshold for positive match
@@ -217,10 +280,11 @@ class BiometricsEngine {
       if (Date.now() - this.lastProcessTime >= this.processIntervalMs) {
         this.lastProcessTime = Date.now();
         const currentDescriptor = this.extractDescriptorsFromImage(offCtx, 160, 120);
-        this.lastMatchResult = this.matchFaceArcFace(currentDescriptor);
+        const livenessResult = this.livenessDetector.evaluateLiveness(imgData);
+        this.lastMatchResult = this.matchFaceArcFace(currentDescriptor, livenessResult);
       }
     } else {
-      this.lastMatchResult = { matched: false, name: null, confidence: 0, label: 'NENHUMA PESSOA DETECTADA NA CÂMERA' };
+      this.lastMatchResult = { matched: false, name: null, confidence: 0, label: 'NENHUMA PESSOA DETECTADA NA CÂMERA', liveness: { isAlive: true, score: 0 } };
     }
 
     return {
@@ -266,9 +330,9 @@ class BiometricsEngine {
   }
 
   /**
-   * ArcFace 1:N Database Identification Engine
+   * ArcFace 1:N Database Identification Engine with Liveness / Anti-Spoofing Verification
    */
-  matchFaceArcFace(targetDescriptor) {
+  matchFaceArcFace(targetDescriptor, livenessResult = { isAlive: true, score: 0.85, status: 'LIVE_HUMAN_CONFIRMED' }) {
     // IF DATABASE IS EMPTY -> Return UNREGISTERED
     if (!this.registeredProfiles || this.registeredProfiles.length === 0) {
       return {
@@ -278,6 +342,22 @@ class BiometricsEngine {
         confidence: 0,
         cosineSimilarity: '0.000',
         arcFaceMarginLogit: '0.00',
+        liveness: livenessResult,
+        profilesChecked: 0
+      };
+    }
+
+    // CHECK LIVENESS ANTI-SPOOFING
+    if (!livenessResult.isAlive) {
+      return {
+        matched: false,
+        isSpoofed: true,
+        label: '🚨 ALERTA DE SEGURANÇA: ATAQUE DE SPOOFING (FOTO ESTÁTICA)',
+        reason: 'Ataque de apresentação detectado: Ausência de micro-dinâmica facial (Foto/Tela parada em frente à câmera)',
+        confidence: 0,
+        cosineSimilarity: '0.000',
+        arcFaceMarginLogit: '0.00',
+        liveness: livenessResult,
         profilesChecked: 0
       };
     }
@@ -333,6 +413,7 @@ class BiometricsEngine {
         confidence: confidence,
         arcFaceMarginLogit: bestArcMargin ? bestArcMargin.scaledMarginLogit.toFixed(2) : '0.00',
         cosineSimilarity: maxCosine.toFixed(3),
+        liveness: livenessResult,
         profilesChecked: totalComparisons
       };
     }
@@ -344,6 +425,7 @@ class BiometricsEngine {
       confidence: Math.max(0, (maxCosine * 100)).toFixed(1),
       cosineSimilarity: maxCosine.toFixed(3),
       arcFaceMarginLogit: bestArcMargin ? bestArcMargin.scaledMarginLogit.toFixed(2) : '0.00',
+      liveness: livenessResult,
       profilesChecked: totalComparisons
     };
   }

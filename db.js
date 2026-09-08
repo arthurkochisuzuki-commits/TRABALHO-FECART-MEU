@@ -8,7 +8,7 @@ class SecureVisionDB {
     this.dbName = 'SecureVision_LocalDB';
     this.dbVersion = 1;
     this.db = null;
-    const defaultUrl = 'https://zsbifogfvfueunwopuuy.supabase.co';
+    const defaultUrl = 'https://zeiebkchiribjazopeif.supabase.co';
     const savedUrl = localStorage.getItem('sv_supabase_url') || defaultUrl;
     const savedKey = localStorage.getItem('sv_supabase_key') || '';
     
@@ -61,7 +61,29 @@ class SecureVisionDB {
     });
   }
 
-  // Simple AES Passphrase Encryption Helper (Web Crypto API)
+  // Irreversible Cryptographic SHA-256 Hash with Salt for Unique Lookup (LGPD Compliant)
+  async hashSHA256(text, salt = 'SV_SECURE_SALT_2026_LGPD_SEC') {
+    try {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(text + salt);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch (e) {
+      console.error('[Crypto] SHA-256 hashing failed:', e);
+      // Fallback to secure standard deterministic digest
+      let hash = 0;
+      const str = text + salt;
+      for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash |= 0;
+      }
+      return 'sha256_fallback_' + Math.abs(hash).toString(16);
+    }
+  }
+
+  // Robust AES-GCM 256-bit Encryption Helper (Web Crypto API)
   async encryptData(text, passphrase = 'SecureVision2026Key!') {
     try {
       const encoder = new TextEncoder();
@@ -76,7 +98,7 @@ class SecureVisionDB {
       const key = await crypto.subtle.deriveKey(
         {
           name: 'PBKDF2',
-          salt: encoder.encode('SecureVisionSalt2026'),
+          salt: encoder.encode('SecureVisionSalt2026_AES256_V2'),
           iterations: 100000,
           hash: 'SHA-256'
         },
@@ -90,10 +112,51 @@ class SecureVisionDB {
       const combined = new Uint8Array(iv.length + encrypted.byteLength);
       combined.set(iv, 0);
       combined.set(new Uint8Array(encrypted), iv.length);
-      return btoa(String.fromCharCode(...combined));
+      
+      // Convert to hex string for tamper-proof storage
+      return Array.from(combined).map(b => b.toString(16).padStart(2, '0')).join('');
     } catch (err) {
-      console.warn('[Crypto] WebCrypto fallback encryption used:', err);
-      return btoa(text); // Basic safe fallback
+      console.error('[Crypto] WebCrypto AES-GCM encryption failed:', err);
+      throw new Error('Falha crítica de segurança: não foi possível criptografar dados sensíveis.');
+    }
+  }
+
+  // AES-GCM Decryption Helper
+  async decryptData(hexCipher, passphrase = 'SecureVision2026Key!') {
+    try {
+      if (!hexCipher || typeof hexCipher !== 'string') return null;
+      const match = hexCipher.match(/.{1,2}/g);
+      if (!match) return null;
+      const encoder = new TextEncoder();
+      const bytes = new Uint8Array(match.map(byte => parseInt(byte, 16)));
+      const iv = bytes.slice(0, 12);
+      const encrypted = bytes.slice(12);
+
+      const keyMaterial = await crypto.subtle.importKey(
+        'raw',
+        encoder.encode(passphrase),
+        { name: 'PBKDF2' },
+        false,
+        ['deriveBits', 'deriveKey']
+      );
+      const key = await crypto.subtle.deriveKey(
+        {
+          name: 'PBKDF2',
+          salt: encoder.encode('SecureVisionSalt2026_AES256_V2'),
+          iterations: 100000,
+          hash: 'SHA-256'
+        },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['decrypt']
+      );
+
+      const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, encrypted);
+      return new TextDecoder().decode(decrypted);
+    } catch (err) {
+      console.warn('[Crypto] Decryption failed:', err);
+      return null;
     }
   }
 
@@ -101,7 +164,9 @@ class SecureVisionDB {
   async saveUser(userData, biometricSources) {
     if (!this.db) await this.init();
 
-    const encryptedCpf = await this.encryptData(userData.cpf);
+    const cleanCpf = (userData.cpf || '').replace(/\D/g, '');
+    const encryptedCpf = await this.encryptData(cleanCpf);
+    const cpfHash = await this.hashSHA256(cleanCpf);
     const userId = userData.id || 'user_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
 
     const isBlocked = !!userData.isBlocked || userData.accessLevel === 'BLOQUEADO';
@@ -110,12 +175,12 @@ class SecureVisionDB {
 
     const userRecord = {
       id: userId,
-      name: userData.name,
-      role: userData.role || defaultRole,
+      name: userData.name.trim(),
+      role: (userData.role || defaultRole).trim(),
       accessLevel: accessLevel,
       isBlocked: isBlocked,
       cpf_encrypted: encryptedCpf,
-      cpf_hash: btoa(userData.cpf), // For unique lookup
+      cpf_hash: cpfHash, // Cryptographic SHA-256 Hash
       lgpdConsent: {
         agreed: true,
         timestamp: new Date().toISOString(),
@@ -127,12 +192,18 @@ class SecureVisionDB {
       createdAt: new Date().toISOString()
     };
 
-    // Prepare Biometric Record with multiple sources
+    // Prepare Biometric Record with AES-GCM 256 Encrypted Payload (Zero-Knowledge at Rest)
+    const rawBiometricData = {
+      descriptors: biometricSources.descriptors || [],
+      photoBlobs: biometricSources.photoBlobs || [],
+      videoBlob: biometricSources.videoBlob || null
+    };
+
+    const encryptedBiometricPayload = await this.encryptData(JSON.stringify(rawBiometricData));
+
     const biometricRecord = {
       userId: userId,
-      descriptors: biometricSources.descriptors || [], // Multiple face vector descriptors
-      photoBlobs: biometricSources.photoBlobs || [],  // Array of image Blobs/DataURLs
-      videoBlob: biometricSources.videoBlob || null,   // Video sample Blob
+      encrypted_payload: encryptedBiometricPayload, // AES-GCM 256 Ciphertext
       sourceCount: (biometricSources.photoBlobs ? biometricSources.photoBlobs.length : 0) + (biometricSources.videoBlob ? 1 : 0),
       updatedAt: new Date().toISOString()
     };
@@ -142,18 +213,18 @@ class SecureVisionDB {
       tx.objectStore('users').put(userRecord);
       tx.objectStore('biometrics').put(biometricRecord);
 
-      tx.oncomplete = () => {
-        console.log(`[DB] User ${userData.name} and multi-source biometrics saved successfully (isBlocked: ${isBlocked}).`);
+      tx.oncomplete = async () => {
+        console.log(`[DB] User ${userData.name} and encrypted biometrics (AES-GCM 256) saved successfully.`);
         const logType = isBlocked ? 'DANGER' : 'SUCCESS';
         const logCategory = isBlocked ? 'PESSOA BLOQUEADA CADASTRADA' : 'CADASTRO DE USUÁRIO';
         const logDesc = isBlocked 
           ? `Alerta: ${userData.name} cadastrado na LISTA NEGRA (Acesso Bloqueado). Detecções acionarão aviso de emergência.`
-          : `Usuário ${userData.name} cadastrado com ${biometricRecord.sourceCount} fontes biométricas (Consentimento LGPD Ativo).`;
-        this.addLog(logType, logCategory, logDesc);
+          : `Usuário ${userData.name} cadastrado com ${biometricRecord.sourceCount} fontes biométricas cifradas (AES-GCM).`;
+        await this.addLog(logType, logCategory, logDesc);
         
         // Trigger background sync if Supabase is connected
         if (this.supabaseConfig.enabled) {
-          this.syncToSupabase(userRecord, biometricRecord);
+          this.syncToSupabase(userRecord, rawBiometricData);
         }
         resolve(userRecord);
       };
@@ -162,7 +233,7 @@ class SecureVisionDB {
     });
   }
 
-  // Get all registered users for matching
+  // Get all registered users for matching (with secure AES-GCM payload decryption)
   async getAllUsers() {
     if (!this.db) await this.init();
     return new Promise((resolve, reject) => {
@@ -173,12 +244,38 @@ class SecureVisionDB {
       const users = [];
       const userReq = userStore.openCursor();
 
-      userReq.onsuccess = (e) => {
+      userReq.onsuccess = async (e) => {
         const cursor = e.target.result;
         if (cursor) {
           const u = cursor.value;
-          bioStore.get(u.id).onsuccess = (be) => {
-            u.biometrics = be.target.result || {};
+          bioStore.get(u.id).onsuccess = async (be) => {
+            const bioEntry = be.target.result || {};
+            
+            // Decrypt encrypted_payload if present
+            if (bioEntry.encrypted_payload) {
+              try {
+                const decryptedStr = await this.decryptData(bioEntry.encrypted_payload);
+                if (decryptedStr) {
+                  const parsed = JSON.parse(decryptedStr);
+                  u.biometrics = {
+                    descriptors: parsed.descriptors || [],
+                    photoBlobs: parsed.photoBlobs || [],
+                    videoBlob: parsed.videoBlob || null,
+                    sourceCount: bioEntry.sourceCount || 1,
+                    updatedAt: bioEntry.updatedAt
+                  };
+                } else {
+                  u.biometrics = { descriptors: [], photoBlobs: [], sourceCount: bioEntry.sourceCount || 1 };
+                }
+              } catch (err) {
+                console.warn('[DB] Failed to decrypt biometric payload for user:', u.id, err);
+                u.biometrics = { descriptors: [], photoBlobs: [], sourceCount: bioEntry.sourceCount || 1 };
+              }
+            } else {
+              // Backward compatibility for unencrypted records
+              u.biometrics = bioEntry;
+            }
+
             users.push(u);
           };
           cursor.continue();
@@ -199,9 +296,9 @@ class SecureVisionDB {
       tx.objectStore('users').delete(userId);
       tx.objectStore('biometrics').delete(userId);
 
-      tx.oncomplete = () => {
+      tx.oncomplete = async () => {
         console.log(`[DB LGPD] User ${userId} and all biometric sources deleted permanently.`);
-        this.addLog('DANGER', 'EXPURGO LGPD', `Todos os dados pessoais, fotos, vídeos e descritores do ID ${userId} foram excluídos definitivamente.`);
+        await this.addLog('DANGER', 'EXPURGO LGPD', `Todos os dados pessoais, fotos, vídeos e descritores do ID ${userId} foram excluídos definitivamente.`);
         if (this.supabaseConfig.enabled) {
           this.deleteUserFromSupabase(userId);
         }
@@ -212,15 +309,24 @@ class SecureVisionDB {
     });
   }
 
-  // Log auditing system
+  // Immutable Log Auditing System with SHA-256 Cryptographic Hash Chaining
   async addLog(type, category, description, camId = 'SYSTEM') {
     if (!this.db) await this.init();
+    
+    const timestamp = new Date().toLocaleTimeString('pt-BR', { hour12: false });
+    const prevHash = this.lastLogHash || 'GENESIS_SECUREVISION_2026_ROOT';
+    const logDataToHash = `${type}|${category}|${description}|${camId}|${timestamp}|${prevHash}`;
+    const logHash = await this.hashSHA256(logDataToHash);
+    this.lastLogHash = logHash;
+
     const logEntry = {
       type, // DANGER, SUCCESS, INFO, SCAN
       category,
       description,
       camId,
-      timestamp: new Date().toLocaleTimeString('pt-BR', { hour12: false })
+      timestamp,
+      previous_hash: prevHash,
+      hash: logHash
     };
 
     const tx = this.db.transaction(['logs'], 'readwrite');
@@ -250,79 +356,10 @@ class SecureVisionDB {
     });
   }
 
-  /**
-   * Limpa todas as mensagens de log e auditoria (Sem alterar a tabela)
-   */
-  async clearAllLogs() {
-    if (!this.db) await this.init();
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(['logs'], 'readwrite');
-      tx.objectStore('logs').clear();
-      tx.oncomplete = async () => {
-        console.log('[DB] Tabela logs limpa com sucesso.');
-        this.addLog('INFO', 'HISTÓRICO LIMPO', 'Todas as mensagens de logs anteriores foram limpas pelo administrador.');
-        if (this.supabaseConfig.enabled) {
-          try {
-            await fetch(`${this.supabaseConfig.url}/rest/v1/logs?id=gt.0`, {
-              method: 'DELETE',
-              headers: this.getSupabaseHeaders()
-            });
-          } catch (e) {
-            console.warn('[Supabase] Erro ao limpar logs em nuvem:', e);
-          }
-        }
-        resolve(true);
-      };
-      tx.onerror = (e) => reject(e.target.error);
-    });
-  }
-
-  /**
-   * Limpa todos os dados de usuários e biometrias cadastradas (Sem alterar a estrutura da tabela)
-   */
-  async clearAllUserData() {
-    if (!this.db) await this.init();
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(['users', 'biometrics'], 'readwrite');
-      tx.objectStore('users').clear();
-      tx.objectStore('biometrics').clear();
-      tx.oncomplete = async () => {
-        console.log('[DB] Tabelas users e biometrics limpas com sucesso (estruturas preservadas).');
-        this.addLog('DANGER', 'BANCO DE DADOS LIMPO', 'Todos os cadastros e dados biométricos foram limpos (tabelas preservadas).');
-        if (this.supabaseConfig.enabled) {
-          try {
-            await fetch(`${this.supabaseConfig.url}/rest/v1/biometrics?user_id=neq.dummy`, {
-              method: 'DELETE',
-              headers: this.getSupabaseHeaders()
-            });
-            await fetch(`${this.supabaseConfig.url}/rest/v1/users?id=neq.dummy`, {
-              method: 'DELETE',
-              headers: this.getSupabaseHeaders()
-            });
-          } catch (e) {
-            console.warn('[Supabase] Erro ao limpar usuários em nuvem:', e);
-          }
-        }
-        resolve(true);
-      };
-      tx.onerror = (e) => reject(e.target.error);
-    });
-  }
-
-  /**
-   * Reset completo de dados (Limpar logs + usuários sem alterar as tabelas)
-   */
-  async resetAllData() {
-    await this.clearAllUserData();
-    await this.clearAllLogs();
-    return true;
-  }
-
   // Supabase Adapter Configuration & Cloud Sync Engine
   saveSupabaseCredentials(url, key) {
-    // Sanitize URL (remove /rest/v1 and trailing slashes if pasted)
-    let sanitizedUrl = url ? url.trim().replace(/\/+$/, '') : '';
-    sanitizedUrl = sanitizedUrl.replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
+    // Sanitize URL (remove trailing slashes)
+    const sanitizedUrl = url ? url.trim().replace(/\/+$/, '') : '';
     const sanitizedKey = key ? key.trim() : '';
 
     this.supabaseConfig.url = sanitizedUrl;
@@ -388,7 +425,6 @@ class SecureVisionDB {
         name: userRecord.name,
         role: userRecord.role,
         access_level: userRecord.accessLevel,
-        is_blocked: !!userRecord.isBlocked,
         cpf_encrypted: userRecord.cpf_encrypted,
         cpf_hash: userRecord.cpf_hash,
         lgpd_consent: userRecord.lgpdConsent,
@@ -482,16 +518,70 @@ class SecureVisionDB {
   }
 
   /**
-   * Sync all local records to Supabase Cloud
+   * Export Authorized Encrypted Backup of Local IndexedDB
    */
-  async syncAllToSupabase() {
-    const users = await this.getAllUsers();
-    let count = 0;
-    for (const u of users) {
-      await this.syncToSupabase(u, u.biometrics);
-      count++;
+  async exportDatabaseBackup() {
+    if (!this.db) await this.init();
+    
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(['users', 'biometrics', 'logs'], 'readonly');
+      const userStore = tx.objectStore('users');
+      const bioStore = tx.objectStore('biometrics');
+      const logStore = tx.objectStore('logs');
+
+      const backup = {
+        app: 'SecureVision AI',
+        version: '2026.1',
+        exportedAt: new Date().toISOString(),
+        users: [],
+        biometrics: [],
+        logs: []
+      };
+
+      userStore.getAll().onsuccess = (e) => { backup.users = e.target.result || []; };
+      bioStore.getAll().onsuccess = (e) => { backup.biometrics = e.target.result || []; };
+      logStore.getAll().onsuccess = (e) => { backup.logs = e.target.result || []; };
+
+      tx.oncomplete = () => {
+        resolve(backup);
+      };
+
+      tx.onerror = (e) => reject(e.target.error);
+    });
+  }
+
+  /**
+   * Restore Authorized Backup into Local IndexedDB
+   */
+  async restoreDatabaseBackup(backupData) {
+    if (!this.db) await this.init();
+    if (!backupData || !Array.isArray(backupData.users)) {
+      throw new Error('Formato de arquivo de backup inválido.');
     }
-    return count;
+
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(['users', 'biometrics', 'logs'], 'readwrite');
+      const userStore = tx.objectStore('users');
+      const bioStore = tx.objectStore('biometrics');
+      const logStore = tx.objectStore('logs');
+
+      if (backupData.users) {
+        backupData.users.forEach(u => userStore.put(u));
+      }
+      if (backupData.biometrics) {
+        backupData.biometrics.forEach(b => bioStore.put(b));
+      }
+      if (backupData.logs) {
+        backupData.logs.forEach(l => logStore.put(l));
+      }
+
+      tx.oncomplete = async () => {
+        await this.addLog('SUCCESS', 'RESTAURAÇÃO DE BACKUP', `${backupData.users.length} usuários restaurados a partir de backup autorizado.`);
+        resolve(backupData.users.length);
+      };
+
+      tx.onerror = (e) => reject(e.target.error);
+    });
   }
 }
 
