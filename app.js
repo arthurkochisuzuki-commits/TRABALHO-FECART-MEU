@@ -29,8 +29,9 @@ class SecureVisionApp {
     window.svIntegrity.init();
 
     this.setupEventListeners();
-    this.setupKioskSecurityLockdown();
     this.setupStatusTab();
+    this.setupSettingsTabControls();
+    this.setupMediaCarouselDrag();
     this.loadTheme();
     this.loadLogsUI();
     this.loadRegisteredUsersUI();
@@ -38,51 +39,6 @@ class SecureVisionApp {
     this.initCameraFeeds();
 
     console.log('[App] SecureVision AI fully operational.');
-  }
-
-  /**
-   * Kiosk & Operator Security Lockdown:
-   * Bloqueia F12, atalhos do DevTools, Exibir Código-Fonte (Ctrl+U) e Botão Direito (Inspecionar)
-   */
-  setupKioskSecurityLockdown() {
-    let lastKioskBlockTime = 0;
-    const KIOSK_BLOCK_DEBOUNCE_MS = 1500; // Delay mínimo de 1.5 segundos entre notificações
-
-    // 1. Bloqueio de Teclas de Atalho de Inspeção
-    window.addEventListener('keydown', (e) => {
-      const isF12 = e.key === 'F12' || e.keyCode === 123;
-      const isCtrlShiftI = (e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'I' || e.key === 'i' || e.keyCode === 73);
-      const isCtrlShiftJ = (e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'J' || e.key === 'j' || e.keyCode === 74);
-      const isCtrlShiftC = (e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'C' || e.key === 'c' || e.keyCode === 67);
-      const isCtrlU = (e.ctrlKey || e.metaKey) && (e.key === 'U' || e.key === 'u' || e.keyCode === 85);
-      const isCtrlS = (e.ctrlKey || e.metaKey) && (e.key === 'S' || e.key === 's' || e.keyCode === 83);
-
-      if (isF12 || isCtrlShiftI || isCtrlShiftJ || isCtrlShiftC || isCtrlU || isCtrlS) {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        const now = Date.now();
-        if (now - lastKioskBlockTime >= KIOSK_BLOCK_DEBOUNCE_MS) {
-          lastKioskBlockTime = now;
-          if (window.svDB) {
-            window.svDB.addLog('DANGER', 'BLOQUEIO DE DEVTOOLS', 'Tentativa de inspeção (F12 / Console) bloqueada pelo sistema.', 'KIOSK');
-          }
-          this.speakVoiceNotification('Acesso ao console de desenvolvedor bloqueado por políticas de segurança.', 'f12_blocked');
-        }
-        return false;
-      }
-    }, true);
-
-    // 2. Bloqueio de Menu de Contexto (Botão Direito do Mouse)
-    window.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      return false;
-    }, true);
-
-    // 3. Limpeza e Proteção de Console contra Injeções
-    console.warn('%c🛡️ SECUREVISION AI - MODO DE ALTA SEGURANÇA ATIVO', 'color:#ef4444; font-size:16px; font-weight:bold;');
-    console.warn('%cO acesso direto e alterações manuais neste console são auditados e gravados.', 'color:#f59e0b; font-size:12px;');
   }
 
   setupEventListeners() {
@@ -176,7 +132,7 @@ class SecureVisionApp {
         btnSaveSupabase.disabled = true;
         btnSaveSupabase.textContent = '🔄 Conectando e Sincronizando...';
 
-        await window.svDB.saveSupabaseCredentials(url, key);
+        window.svDB.saveSupabaseCredentials(url, key);
         const testResult = await window.svDB.testSupabaseConnection();
 
         if (testResult.success) {
@@ -190,112 +146,16 @@ class SecureVisionApp {
         btnSaveSupabase.textContent = '💾 Salvar Credenciais Supabase';
       });
     }
-
-    // Export Zero-Knowledge Password-Protected Backup (AES-GCM 256 + SHA-256 Digest)
-    const btnExportBackup = document.getElementById('btnExportBackup');
-    if (btnExportBackup) {
-      btnExportBackup.addEventListener('click', async () => {
-        const passphrase = prompt('🔐 DEFINIR SENHA DO BACKUP CRIPTOGRAFADO:\n\nInforme uma senha para proteger os dados biométricos e registros do sistema:', 'SecureVision2026!');
-        if (!passphrase) {
-          alert('⚠️ Exportação cancelada. A definição de senha é obrigatória para gerar o backup criptografado.');
-          return;
-        }
-
-        try {
-          btnExportBackup.disabled = true;
-          btnExportBackup.textContent = '⏳ Gerando Cofre Criptografado...';
-          const backupData = await window.svDB.exportDatabaseBackup(passphrase);
-          const jsonStr = JSON.stringify(backupData, null, 2);
-          const blob = new Blob([jsonStr], { type: 'application/json' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          const dateStr = new Date().toISOString().slice(0, 10);
-          a.href = url;
-          a.download = `securevision_vault_backup_${dateStr}.json`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-          alert('✅ COFRE DE BACKUP EXPORTADO COM SUCESSO!\n\nOs dados foram 100% criptografados com AES-GCM 256-bit e protegidos por assinatura SHA-256.');
-        } catch (err) {
-          alert(`❌ Erro ao exportar backup: ${err.message}`);
-        } finally {
-          btnExportBackup.disabled = false;
-          btnExportBackup.textContent = '📦 Exportar Backup Criptografado (JSON)';
-        }
-      });
-    }
-
-    // Restore Zero-Knowledge Encrypted Backup
-    const inputImportBackup = document.getElementById('inputImportBackup');
-    if (inputImportBackup) {
-      inputImportBackup.addEventListener('change', async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-
-        const passphrase = prompt('🔑 INFORME A SENHA DE DESCRIPTOGRAFIA DO BACKUP:\n\nDigite a senha definida no momento da exportação deste cofre:');
-        if (!passphrase) {
-          alert('⚠️ Restauração cancelada. A senha de descriptografia é obrigatória.');
-          inputImportBackup.value = '';
-          return;
-        }
-
-        try {
-          const text = await file.text();
-          const backupData = JSON.parse(text);
-          const count = await window.svDB.restoreDatabaseBackup(backupData, passphrase);
-          await window.svBiometrics.reloadRegisteredUsers();
-          this.loadRegisteredUsersUI();
-          this.loadLogsUI();
-          alert(`✅ RESTAURAÇÃO CONCLUÍDA COM SUCESSO!\n\n${count} registros foram verificados por esquema, descriptografados e integrados com segurança ao banco de dados.`);
-        } catch (err) {
-          alert(`❌ FALHA DE SEGURANÇA NA RESTAURAÇÃO:\n\n${err.message}`);
-        } finally {
-          inputImportBackup.value = '';
-        }
-      });
-    }
   }
 
   loadSupabaseUI() {
     const urlInput = document.getElementById('supabaseUrlInput');
     const keyInput = document.getElementById('supabaseKeyInput');
-    if (urlInput && window.svDB && window.svDB.supabaseConfig.url) {
-      urlInput.value = window.svDB.supabaseConfig.url;
-    }
-    if (keyInput && window.svDB && window.svDB.supabaseConfig.key) {
-      keyInput.value = window.svDB.supabaseConfig.key;
-    }
+    if (urlInput) urlInput.value = window.svDB.supabaseConfig.url || '';
+    if (keyInput) keyInput.value = window.svDB.supabaseConfig.key || '';
   }
 
-  // Security Helper: Official Brazilian CPF Validation Algorithm (Modulo 11 with Check Digits)
-  validateCPF(cpf) {
-    if (!cpf || typeof cpf !== 'string') return false;
-    const clean = cpf.replace(/\D/g, '');
-    if (clean.length !== 11) return false;
-    
-    // Rejeita sequências com todos os dígitos iguais (ex: 00000000000, 11111111111, etc.)
-    if (/^(\d)\1{10}$/.test(clean)) return false;
-
-    // Cálculo do 1º Dígito Verificador
-    let sum = 0;
-    for (let i = 0; i < 9; i++) {
-      sum += parseInt(clean.charAt(i), 10) * (10 - i);
-    }
-    let rest = 11 - (sum % 11);
-    let digit1 = (rest === 10 || rest === 11) ? 0 : rest;
-    if (digit1 !== parseInt(clean.charAt(9), 10)) return false;
-
-    // Cálculo do 2º Dígito Verificador
-    sum = 0;
-    for (let i = 0; i < 10; i++) {
-      sum += parseInt(clean.charAt(i), 10) * (11 - i);
-    }
-    rest = 11 - (sum % 11);
-    let digit2 = (rest === 10 || rest === 11) ? 0 : rest;
-    return digit2 === parseInt(clean.charAt(10), 10);
-  }
-
+  // Theme Management (Light vs Dark Mode)
   loadTheme() {
     const savedTheme = localStorage.getItem('sv_theme') || 'dark';
     this.setTheme(savedTheme);
@@ -324,19 +184,7 @@ class SecureVisionApp {
     if (targetTab) targetTab.classList.add('active');
   }
 
-  // Security Helper: Universal XSS Prevention Sanitizer
-  escapeHTML(str) {
-    if (typeof str !== 'string') return str || '';
-    return str.replace(/[&<>'"]/g, tag => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      "'": '&#39;',
-      '"': '&quot;'
-    }[tag] || tag));
-  }
-
-  // 🔍 Verificar Câmeras Conectadas no Dispositivo (com detecção de Câmeras Virtuais e Anti-XSS)
+  // 🔍 Verificar Câmeras Conectadas no Dispositivo
   async openCameraCheckModal() {
     const modal = document.getElementById('cameraCheckModal');
     const deviceListEl = document.getElementById('connectedDeviceList');
@@ -356,69 +204,37 @@ class SecureVisionApp {
             ⚠️ Nenhuma câmera física ou webcam USB conectada ao computador.
           </div>`;
       } else {
-        deviceListEl.innerHTML = '';
-        const ul = document.createElement('ul');
-        ul.style.cssText = 'list-style:none; display:flex; flex-direction:column; gap:8px; padding:0; margin:0;';
-
-        const virtualDriverKeywords = ['obs', 'virtual', 'manycam', 'v4l2loopback', 'fake', 'splitcam', 'droidcam'];
-
+        let html = `<ul style="list-style:none; display:flex; flex-direction:column; gap:8px;">`;
         this.connectedDevices.forEach((dev, index) => {
-          const rawLabel = dev.label || `Câmera Dispositivo #${index + 1}`;
-          const isVirtual = virtualDriverKeywords.some(kw => rawLabel.toLowerCase().includes(kw));
-
-          const li = document.createElement('li');
-          li.style.cssText = `background:var(--bg-card); border:1px solid ${isVirtual ? '#ef4444' : 'var(--border-color)'}; padding:10px 14px; border-radius:6px; display:flex; align-items:center; justify-content:space-between;`;
-
-          const infoDiv = document.createElement('div');
-          const titleStrong = document.createElement('strong');
-          titleStrong.style.cssText = 'color:var(--text-main); font-size:0.85rem; display:block;';
-          titleStrong.textContent = `📷 ${rawLabel}`;
-          
-          if (isVirtual) {
-            const warnBadge = document.createElement('span');
-            warnBadge.style.cssText = 'font-size:0.65rem; color:#ef4444; background:rgba(239,68,68,0.15); border:1px solid #ef4444; padding:2px 6px; border-radius:3px; margin-left:6px; font-weight:700;';
-            warnBadge.textContent = '⚠️ CÂMERA VIRTUAL DETECTADA';
-            titleStrong.appendChild(warnBadge);
-          }
-
-          const idDiv = document.createElement('div');
-          idDiv.style.cssText = 'font-family: monospace; font-size:0.7rem; color:var(--text-dim); margin-top:2px;';
-          idDiv.textContent = `ID: ${dev.deviceId.substring(0, 24)}...`;
-
-          infoDiv.appendChild(titleStrong);
-          infoDiv.appendChild(idDiv);
-
-          const btnDiv = document.createElement('div');
-          const btn = document.createElement('button');
-          btn.className = 'btn-action';
-          btn.style.cssText = 'font-size:0.75rem; padding:4px 8px;';
-          btn.textContent = 'Conectar Feed 1';
-          btn.addEventListener('click', () => this.assignCameraToSlot(dev.deviceId, rawLabel, 1));
-
-          btnDiv.appendChild(btn);
-          li.appendChild(infoDiv);
-          li.appendChild(btnDiv);
-          ul.appendChild(li);
+          html += `
+            <li style="background:var(--bg-card); border:1px solid var(--border-color); padding:10px 14px; border-radius:6px; display:flex; align-items:center; justify-content:space-between;">
+              <div>
+                <strong style="color:var(--text-main); font-size:0.85rem;">📷 ${dev.label || `Câmera Dispositivo #${index + 1}`}</strong>
+                <div style="font-family: monospace; font-size:0.7rem; color:var(--text-dim);">ID: ${dev.deviceId.substring(0, 20)}...</div>
+              </div>
+              <div style="display:flex; gap:6px;">
+                <button class="btn-action" style="font-size:0.75rem; padding:4px 8px;" onclick="window.svApp.assignCameraToSlot('${dev.deviceId}', '${dev.label}', 1)">Conectar Feed 1</button>
+              </div>
+            </li>`;
         });
-
-        deviceListEl.appendChild(ul);
+        html += `</ul>`;
+        deviceListEl.innerHTML = html;
       }
 
       window.svDB.addLog('INFO', 'VERIFICAÇÃO DE CÂMERAS', `${this.connectedDevices.length} dispositivos de vídeo verificados no sistema.`);
     } catch (err) {
       console.error('[Cameras] Error enumerating devices:', err);
-      deviceListEl.innerHTML = `<div style="color:#ef4444;">Erro ao verificar câmeras: ${this.escapeHTML(err.message)}</div>`;
+      deviceListEl.innerHTML = `<div style="color:#ef4444;">Erro ao verificar câmeras: ${err.message}</div>`;
     }
   }
 
   async assignCameraToSlot(deviceId, label, slotNum = 1) {
-    const safeLabel = label || `Webcam ${slotNum}`;
     this.cameraFeeds[0].deviceId = deviceId;
-    this.cameraFeeds[0].name = safeLabel;
+    this.cameraFeeds[0].name = label || `Webcam ${slotNum}`;
     
     document.getElementById('cameraCheckModal').classList.remove('active');
     await this.connectSlotCamera(1, deviceId);
-    alert(`Câmera "${safeLabel}" conectada com sucesso ao Feed 1!`);
+    alert(`Câmera "${label}" conectada com sucesso ao Feed 1!`);
   }
 
   async connectSlotCamera(slotNum, deviceId) {
@@ -544,30 +360,14 @@ class SecureVisionApp {
       }
       this.speakVoiceNotification('Nenhuma pessoa detectada na câmera. Processamento biométrico pausado.', 'paused_voice');
 
-    } else if (statusState === 'SPOOF') {
-      bannerEl.className = 'identity-status-banner unauthorized';
-      if (iconEl) iconEl.textContent = '⚠️';
-      if (titleEl) {
-        titleEl.textContent = '🚨 ALERTA CRÍTICO: ATAQUE DE SPOOFING DETECTADO';
-        titleEl.style.color = '#ef4444';
-      }
-      if (subEl) subEl.textContent = 'Fraude Biométrica: Imagem estática ou foto parada detectada em frente à câmera. Prova de vida (Liveness) rejeitada.';
-      if (badgeEl) {
-        badgeEl.textContent = 'SPOOF / FOTO ESTÁTICA';
-        badgeEl.style.background = 'rgba(239,68,68,0.3)';
-        badgeEl.style.borderColor = '#ef4444';
-        badgeEl.style.color = '#ff6b6b';
-      }
-      this.speakVoiceNotification('Alerta de segurança! Tentativa de fraude por foto ou tela detectada!', 'spoof_voice');
-
     } else if (statusState === 'AUTHORIZED') {
       bannerEl.className = 'identity-status-banner authorized';
       if (iconEl) iconEl.textContent = '✅';
       if (titleEl) {
-        titleEl.textContent = `PESSOA CADASTRADA: ${details.name ? this.escapeHTML(details.name).toUpperCase() : 'AUTORIZADO'}`;
+        titleEl.textContent = `PESSOA CADASTRADA: ${details.name ? details.name.toUpperCase() : 'AUTORIZADO'}`;
         titleEl.style.color = '#10b981';
       }
-      if (subEl) subEl.textContent = `Identidade confirmada no Banco de Dados Biométrico (Confiança: ${details.confidence || 95}% | Liveness: ${details.livenessScore || 90}% ✓ | ArcFace Margin s=32, m=0.5).`;
+      if (subEl) subEl.textContent = `Identidade confirmada no Banco de Dados Biométrico (Confiança: ${details.confidence || 95}% | ArcFace Margin s=32, m=0.5).`;
       if (badgeEl) {
         badgeEl.textContent = 'CADASTRADO / AUTORIZADO';
         badgeEl.style.background = 'rgba(16,185,129,0.15)';
@@ -580,7 +380,7 @@ class SecureVisionApp {
       bannerEl.className = 'identity-status-banner unauthorized';
       if (iconEl) iconEl.textContent = '⛔';
       if (titleEl) {
-        titleEl.textContent = `🚫 ALERTA CRÍTICO: PESSOA BLOQUEADA DETECTADA: ${details.name ? this.escapeHTML(details.name).toUpperCase() : 'BLOQUEADO'}`;
+        titleEl.textContent = `🚫 ALERTA CRÍTICO: PESSOA BLOQUEADA DETECTADA: ${details.name ? details.name.toUpperCase() : 'BLOQUEADO'}`;
         titleEl.style.color = '#ef4444';
       }
       if (subEl) subEl.textContent = `ACESSO TOTALMENTE PROIBIDO (Lista Negra). Indivíduo com restrição de segurança identificado no banco (Confiança: ${details.confidence || 95}%).`;
@@ -652,16 +452,12 @@ class SecureVisionApp {
 
           if (box.detected) {
             // PESSOA DETECTADA NA CÂMERA -> PROCESSAR BIOMETRIA E ATUALIZAR STATUS
-            if (match && match.isSpoofed) {
-              this.updateIdentityBanner('SPOOF', match);
-              this.updateSystemStatusLive('SPOOF', match);
-            } else if (match && match.matched) {
+            if (match && match.matched) {
               if (match.isBlocked) {
                 this.updateIdentityBanner('BLOCKED', { name: match.name, confidence: match.confidence, role: match.role });
                 this.updateSystemStatusLive('BLOCKED', match);
               } else {
-                const livenessScore = match.liveness ? match.liveness.scorePercent : '95';
-                this.updateIdentityBanner('AUTHORIZED', { name: match.name, confidence: match.confidence, role: match.role, livenessScore });
+                this.updateIdentityBanner('AUTHORIZED', { name: match.name, confidence: match.confidence, role: match.role });
                 this.updateSystemStatusLive('AUTHORIZED', match);
               }
             } else {
@@ -692,8 +488,7 @@ class SecureVisionApp {
    * Draws dynamic bounding box over active video stream
    */
   drawDynamicBoundingBox(ctx, box, match, camId) {
-    const isSpoofed = match && match.isSpoofed;
-    const isMatched = match && match.matched && !isSpoofed;
+    const isMatched = match && match.matched;
     const isBlocked = isMatched && match.isBlocked;
     const isAuthorized = isMatched && !match.isBlocked;
 
@@ -705,9 +500,6 @@ class SecureVisionApp {
     } else if (isBlocked) {
       strokeColor = '#dc2626';
       fillColor = 'rgba(220, 38, 38, 0.28)';
-    } else if (isSpoofed) {
-      strokeColor = '#ff4444';
-      fillColor = 'rgba(255, 68, 68, 0.35)';
     }
 
     // Update Card UI Border
@@ -720,10 +512,8 @@ class SecureVisionApp {
         
         if (Date.now() - this.lastLoggedUnauthorized > 8000) {
           this.lastLoggedUnauthorized = Date.now();
-          if (isSpoofed) {
-            window.svDB.addLog('DANGER', 'ATAQUE DE SPOOFING DETECTADO', `Tentativa de fraude biométrica com foto estática/tela identificada na ${camId}! Acesso bloqueado.`, camId);
-          } else if (isBlocked) {
-            window.svDB.addLog('DANGER', 'PESSOA BLOQUEADA IDENTIFICADA', `Indivíduo na lista negra (${this.escapeHTML(match.name)}) detectado na ${camId}! Acesso terminantemente negado.`, camId);
+          if (isBlocked) {
+            window.svDB.addLog('DANGER', 'PESSOA BLOQUEADA IDENTIFICADA', `Indivíduo na lista negra (${match.name}) detectado na ${camId}! Acesso terminantemente negado.`, camId);
           } else {
             window.svDB.addLog('DANGER', 'PESSOA NÃO AUTORIZADA', `Rosto não cadastrado no banco detectado na ${camId}! Acesso negado.`, camId);
           }
@@ -769,16 +559,12 @@ class SecureVisionApp {
     ctx.stroke();
 
     // 3. Draw Label Badge Box above face
-    const labelText = isSpoofed
-      ? '⚠️ FRAUDE: FOTO ESTÁTICA DETECTADA'
-      : (isAuthorized 
-          ? `${match.name} [AUTORIZADO]` 
-          : (isBlocked ? `⛔ ${match.name} [ACESSO BLOQUEADO]` : (match.label || '🚨 RED ALERT - NÃO AUTORIZADO')));
-    const subText = isSpoofed
-      ? 'SPOOFING / LIVENESS REJEITADO (0.0%)'
-      : (isAuthorized 
-          ? `Confiança: ${match.confidence}%` 
-          : (isBlocked ? `LISTA NEGRA / ALERTA CRÍTICO (${match.confidence}%)` : 'Rosto Ausente no Banco DB'));
+    const labelText = isAuthorized 
+      ? `${match.name} [AUTORIZADO]` 
+      : (isBlocked ? `⛔ ${match.name} [ACESSO BLOQUEADO]` : (match.label || '🚨 RED ALERT - NÃO AUTORIZADO'));
+    const subText = isAuthorized 
+      ? `Confiança: ${match.confidence}%` 
+      : (isBlocked ? `LISTA NEGRA / ALERTA CRÍTICO (${match.confidence}%)` : 'Rosto Ausente no Banco DB');
 
     ctx.font = 'bold 11px JetBrains Mono, monospace';
     const textWidth = ctx.measureText(labelText).width;
@@ -827,17 +613,65 @@ class SecureVisionApp {
 
     this.enrollmentPhotos.push({ dataUrl, descriptor });
 
-    // Update UI thumbnails
+    // Update UI thumbnails (Carrossel Horizontal com Auto-Scroll)
     const container = document.getElementById('mediaSourcesContainer');
     if (container) {
       const thumb = document.createElement('div');
       thumb.className = 'media-thumb';
-      thumb.innerHTML = `<img src="${dataUrl}" /><span style="position:absolute; bottom:2px; right:2px; background:#000; color:#06b6d4; font-size:0.6rem; padding:1px 4px; border-radius:2px;">#${this.enrollmentPhotos.length}</span>`;
+      thumb.title = `Foto Biométrica #${this.enrollmentPhotos.length}`;
+      thumb.innerHTML = `<img src="${dataUrl}" /><span style="position:absolute; bottom:2px; right:2px; background:rgba(0,0,0,0.85); color:#06b6d4; font-size:0.6rem; padding:1px 4px; border-radius:2px; font-weight:700;">#${this.enrollmentPhotos.length}</span>`;
       container.appendChild(thumb);
+
+      // Auto-scroll suave para a foto recém capturada
+      setTimeout(() => {
+        container.scrollTo({ left: container.scrollWidth, behavior: 'smooth' });
+      }, 50);
     }
 
     const countEl = document.getElementById('sourcesCapturedCount');
     if (countEl) countEl.textContent = `${this.enrollmentPhotos.length} / 3 Fotos Biométricas Capturadas`;
+  }
+
+  /**
+   * Habilita funcionalidade de arrastar com o mouse (Drag-to-Scroll) e roda do mouse no carrossel de fotos
+   */
+  setupMediaCarouselDrag() {
+    const container = document.getElementById('mediaSourcesContainer');
+    if (!container) return;
+
+    let isDown = false;
+    let startX = 0;
+    let scrollLeft = 0;
+
+    container.addEventListener('mousedown', (e) => {
+      isDown = true;
+      startX = e.pageX - container.offsetLeft;
+      scrollLeft = container.scrollLeft;
+    });
+
+    container.addEventListener('mouseleave', () => {
+      isDown = false;
+    });
+
+    container.addEventListener('mouseup', () => {
+      isDown = false;
+    });
+
+    container.addEventListener('mousemove', (e) => {
+      if (!isDown) return;
+      e.preventDefault();
+      const x = e.pageX - container.offsetLeft;
+      const walk = (x - startX) * 1.8; // Velocidade do arraste
+      container.scrollLeft = scrollLeft - walk;
+    });
+
+    // Permite rolar para os lados usando a roda do mouse (Wheel Scroll)
+    container.addEventListener('wheel', (e) => {
+      if (e.deltaY !== 0) {
+        e.preventDefault();
+        container.scrollLeft += e.deltaY;
+      }
+    }, { passive: false });
   }
 
   recordEnrollmentVideo() {
@@ -864,9 +698,10 @@ class SecureVisionApp {
       return;
     }
 
-    // Validação estrita e matemática do CPF (Dígitos Verificadores Módulo 11)
-    if (!this.validateCPF(cpf)) {
-      alert('⚠️ CPF Inválido: O número informado não é um CPF autêntico válido perante o algoritmo oficial da Receita Federal. Verifique os números digitados.');
+    // Validação estrita de CPF (11 dígitos numéricos)
+    const cleanCpf = cpf.replace(/\D/g, '');
+    if (cleanCpf.length !== 11) {
+      alert('⚠️ CPF Inválido: O CPF deve conter exatamente 11 dígitos numéricos (formato 000.000.000-00).');
       document.getElementById('enrollCpf').focus();
       return;
     }
@@ -913,7 +748,7 @@ class SecureVisionApp {
     this.switchTab('monitoring');
   }
 
-  // Render registered users with LGPD Delete Option and Blocked Badges (Anti-XSS Secured)
+  // Render registered users with LGPD Delete Option and Blocked Badges
   async loadRegisteredUsersUI() {
     const listEl = document.getElementById('registeredUsersList');
     if (!listEl) return;
@@ -928,89 +763,46 @@ class SecureVisionApp {
       return;
     }
 
-    listEl.innerHTML = '';
+    let html = '';
     users.forEach(u => {
       const photos = u.biometrics ? (u.biometrics.photoBlobs || []) : [];
       const sourcesCount = u.biometrics ? u.biometrics.sourceCount || 1 : 1;
       const isBlocked = !!u.isBlocked || u.accessLevel === 'BLOQUEADO';
-      const safeName = this.escapeHTML(u.name);
-      const safeRole = this.escapeHTML(u.role);
 
-      const itemCard = document.createElement('div');
-      itemCard.style.cssText = `background:var(--bg-card); border:1px solid ${isBlocked ? 'rgba(239,68,68,0.4)' : 'var(--border-color)'}; padding:12px; border-radius:8px; display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;`;
+      const avatarHtml = photos[0]
+        ? `<img src="${photos[0]}" style="width:40px; height:40px; border-radius:50%; object-fit:cover; border:2px solid ${isBlocked ? '#ef4444' : '#06b6d4'};" />`
+        : `<div style="width:40px; height:40px; border-radius:50%; background:${isBlocked ? '#991b1b' : '#2563eb'}; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:bold;">${isBlocked ? '🚫' : u.name[0]}</div>`;
 
-      const leftDiv = document.createElement('div');
-      leftDiv.style.cssText = 'display:flex; align-items:center; gap:12px;';
+      const statusBadge = isBlocked
+        ? `<span style="font-size:0.7rem; color:#ef4444; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.4); padding:2px 8px; border-radius:4px; font-weight:700;">🚫 BLOQUEADO (LISTA NEGRA)</span>`
+        : `<span style="font-size:0.7rem; color:#10b981; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.4); padding:2px 8px; border-radius:4px; font-weight:700;">✓ AUTORIZADO</span> <span style="font-size:0.7rem; color:#06b6d4; background:rgba(6,182,212,0.1); padding:2px 6px; border-radius:4px;">${u.role}</span>`;
 
-      if (photos[0]) {
-        const img = document.createElement('img');
-        img.src = photos[0];
-        img.style.cssText = `width:40px; height:40px; border-radius:50%; object-fit:cover; border:2px solid ${isBlocked ? '#ef4444' : '#06b6d4'};`;
-        leftDiv.appendChild(img);
-      } else {
-        const initialDiv = document.createElement('div');
-        initialDiv.style.cssText = `width:40px; height:40px; border-radius:50%; background:${isBlocked ? '#991b1b' : '#2563eb'}; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:bold;`;
-        initialDiv.textContent = isBlocked ? '🚫' : (u.name[0] || '?');
-        leftDiv.appendChild(initialDiv);
-      }
-
-      const textDiv = document.createElement('div');
-      
-      const titleRow = document.createElement('div');
-      titleRow.style.cssText = 'color:var(--text-main); font-weight:600; font-size:0.9rem; display:flex; align-items:center; gap:6px; flex-wrap:wrap;';
-      
-      const nameSpan = document.createElement('span');
-      nameSpan.textContent = u.name;
-      titleRow.appendChild(nameSpan);
-
-      const statusBadge = document.createElement('span');
-      if (isBlocked) {
-        statusBadge.style.cssText = 'font-size:0.7rem; color:#ef4444; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.4); padding:2px 8px; border-radius:4px; font-weight:700;';
-        statusBadge.textContent = '🚫 BLOQUEADO (LISTA NEGRA)';
-        titleRow.appendChild(statusBadge);
-      } else {
-        statusBadge.style.cssText = 'font-size:0.7rem; color:#10b981; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.4); padding:2px 8px; border-radius:4px; font-weight:700;';
-        statusBadge.textContent = '✓ AUTORIZADO';
-        
-        const roleBadge = document.createElement('span');
-        roleBadge.style.cssText = 'font-size:0.7rem; color:#06b6d4; background:rgba(6,182,212,0.1); padding:2px 6px; border-radius:4px; font-weight:500;';
-        roleBadge.textContent = u.role || 'Funcionário';
-        
-        titleRow.appendChild(statusBadge);
-        titleRow.appendChild(roleBadge);
-      }
-      textDiv.appendChild(titleRow);
-
-      const subMeta = document.createElement('div');
-      subMeta.style.cssText = 'font-size:0.75rem; color:var(--text-muted); margin-top:3px;';
-      const lgpdDate = new Date(u.lgpdConsent ? u.lgpdConsent.timestamp : Date.now()).toLocaleDateString();
-      subMeta.textContent = `Fontes Biométricas: ${sourcesCount} Mídias | CPF: Criptografado AES-256 (SHA-256 Hash) | LGPD Consent: ${lgpdDate}`;
-      textDiv.appendChild(subMeta);
-      leftDiv.appendChild(textDiv);
-
-      const delBtn = document.createElement('button');
-      delBtn.className = 'btn-outline';
-      delBtn.style.cssText = 'color:#ef4444; border-color:rgba(239,68,68,0.4); font-size:0.75rem;';
-      delBtn.textContent = '🗑️ Excluir (LGPD)';
-      delBtn.addEventListener('click', () => this.deleteUserLGPD(u.id, u.name));
-
-      itemCard.appendChild(leftDiv);
-      itemCard.appendChild(delBtn);
-      listEl.appendChild(itemCard);
+      html += `
+        <div style="background:var(--bg-card); border:1px solid ${isBlocked ? 'rgba(239,68,68,0.4)' : 'var(--border-color)'}; padding:12px; border-radius:8px; display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <div style="display:flex; align-items:center; gap:12px;">
+            ${avatarHtml}
+            <div>
+              <div style="color:var(--text-main); font-weight:600; font-size:0.9rem;">${u.name} ${statusBadge}</div>
+              <div style="font-size:0.75rem; color:var(--text-muted); margin-top:3px;">Fontes Biométricas: ${sourcesCount} Mídias | CPF: Criptografado AES-256 | LGPD Consent: ${new Date(u.lgpdConsent.timestamp).toLocaleDateString()}</div>
+            </div>
+          </div>
+          <button class="btn-outline" style="color:#ef4444; border-color:rgba(239,68,68,0.4); font-size:0.75rem;" onclick="window.svApp.deleteUserLGPD('${u.id}', '${u.name}')">🗑️ Excluir (LGPD)</button>
+        </div>`;
     });
+
+    listEl.innerHTML = html;
   }
 
   async deleteUserLGPD(userId, userName) {
-    const safeName = this.escapeHTML(userName);
-    if (confirm(`⚠️ EXCLUSÃO LGPD (DIREITO AO ESQUECIMENTO):\nTem certeza que deseja apagar DEFINITIVAMENTE todos os dados, fotos, vídeos e biometria de "${safeName}"?\nEsta ação é irreversível.`)) {
+    if (confirm(`⚠️ EXCLUSÃO LGPD (DIREITO AO ESQUECIMENTO):\nTem certeza que deseja apagar DEFINITIVAMENTE todos os dados, fotos, vídeos e biometria de "${userName}"?\nEsta ação é irreversível.`)) {
       await window.svDB.deleteUserLGPD(userId);
       await window.svBiometrics.reloadRegisteredUsers();
       this.loadRegisteredUsersUI();
-      alert(`Dados de ${safeName} foram excluídos permanentemente de acordo com a LGPD.`);
+      alert(`Dados de ${userName} foram excluídos permanentemente de acordo com a LGPD.`);
     }
   }
 
-  // Live Logs UI (Anti-XSS Secured)
+  // Live Logs UI
   async loadLogsUI() {
     const listEl = document.getElementById('liveLogsList');
     if (!listEl) return;
@@ -1033,30 +825,14 @@ class SecureVisionApp {
     if (log.type === 'SUCCESS') { badgeClass = 'success'; icon = '✓'; }
     if (log.type === 'SCAN') { badgeClass = 'scan'; icon = '🔄'; }
 
-    const metaDiv = document.createElement('div');
-    metaDiv.className = 'log-meta';
-    
-    const timeSpan = document.createElement('span');
-    timeSpan.textContent = log.timestamp || '';
-    
-    const camSpan = document.createElement('span');
-    camSpan.className = 'cam-tag';
-    camSpan.textContent = log.camId || 'SYSTEM';
-
-    metaDiv.appendChild(timeSpan);
-    metaDiv.appendChild(camSpan);
-
-    const badgeDiv = document.createElement('div');
-    badgeDiv.className = `log-badge ${badgeClass}`;
-    badgeDiv.textContent = `${icon} ${log.category || ''}`;
-
-    const descDiv = document.createElement('div');
-    descDiv.className = 'log-desc';
-    descDiv.textContent = log.description || '';
-
-    card.appendChild(metaDiv);
-    card.appendChild(badgeDiv);
-    card.appendChild(descDiv);
+    card.innerHTML = `
+      <div class="log-meta">
+        <span>${log.timestamp}</span>
+        <span class="cam-tag">${log.camId}</span>
+      </div>
+      <div class="log-badge ${badgeClass}">${icon} ${log.category}</div>
+      <div class="log-desc">${log.description}</div>
+    `;
 
     listEl.insertBefore(card, listEl.firstChild);
   }
@@ -1067,7 +843,13 @@ class SecureVisionApp {
       const gpuEl = document.getElementById('metricGpu');
       if (fpsEl) fpsEl.textContent = (59.0 + Math.random() * 1.5).toFixed(1);
       if (gpuEl) gpuEl.textContent = `${Math.floor(78 + Math.random() * 8)}%`;
-    }, 1500);
+
+      // Atualiza leitura em tempo real dos pixels detectados na aba de configurações
+      const livePxEl = document.getElementById('lblLiveDetectedPixels');
+      if (livePxEl && window.svBiometrics) {
+        livePxEl.textContent = `${window.svBiometrics.lastDetectedPixels || 0} px`;
+      }
+    }, 500);
 
     // Auto-refresh System Status tab every 5 seconds
     setInterval(() => this.refreshStatusTabData(), 5000);
@@ -1104,20 +886,6 @@ class SecureVisionApp {
       elConfidence.textContent = '—';
       elMargin.textContent = '—';
       if (elEngine) { elEngine.textContent = 'Standby (Economia de GPU)'; elEngine.className = 'status-metric-value warning'; }
-    } else if (state === 'SPOOF' && match) {
-      elPerson.textContent = 'Spoof Detectado ⚠️';
-      elPerson.className = 'status-metric-value offline';
-      elResult.textContent = '🚨 FRAUDE / FOTO ESTÁTICA';
-      elResult.className = 'status-metric-value offline';
-      elResult.style.color = '#ef4444';
-      elName.textContent = 'Tentativa de Spoofing';
-      elName.style.color = '#ef4444';
-      elCosine.textContent = '0.000';
-      elConfidence.textContent = '0.0%';
-      elMargin.textContent = 'Rejeitado';
-      if (elEngine) { elEngine.textContent = 'Anti-Spoofing Ativado (Bloqueado)'; elEngine.className = 'status-metric-value offline'; }
-
-      this.addRecognitionTimelineEvent('spoof', 'Foto Estática / Tela', '0.000', '0.0');
     } else if (state === 'AUTHORIZED' && match) {
       elPerson.textContent = 'Detectada ✓';
       elPerson.className = 'status-metric-value online';
@@ -1189,39 +957,16 @@ class SecureVisionApp {
       icon = '⛔';
       badgeClass = 'unauth';
       badgeText = 'BLOQUEADO';
-    } else if (type === 'spoof') {
-      icon = '⚠️';
-      badgeClass = 'unauth';
-      badgeText = 'SPOOF DETECTADO';
     }
 
     const eventEl = document.createElement('div');
     eventEl.className = 'timeline-event';
-
-    const timeSpan = document.createElement('span');
-    timeSpan.className = 'tl-time';
-    timeSpan.textContent = timeStr;
-
-    const iconSpan = document.createElement('span');
-    iconSpan.className = 'tl-icon';
-    iconSpan.textContent = icon;
-
-    const textSpan = document.createElement('span');
-    textSpan.className = 'tl-text';
-
-    const strongName = document.createElement('strong');
-    strongName.textContent = name || '';
-    textSpan.appendChild(strongName);
-    textSpan.appendChild(document.createTextNode(` — Cosseno: ${cosine || '0.000'} | Confiança: ${confidence || '0'}%`));
-
-    const badgeSpan = document.createElement('span');
-    badgeSpan.className = `tl-badge ${badgeClass}`;
-    badgeSpan.textContent = badgeText;
-
-    eventEl.appendChild(timeSpan);
-    eventEl.appendChild(iconSpan);
-    eventEl.appendChild(textSpan);
-    eventEl.appendChild(badgeSpan);
+    eventEl.innerHTML = `
+      <span class="tl-time">${timeStr}</span>
+      <span class="tl-icon">${icon}</span>
+      <span class="tl-text"><strong>${name}</strong> — Cosseno: ${cosine} | Confiança: ${confidence}%</span>
+      <span class="tl-badge ${badgeClass}">${badgeText}</span>
+    `;
 
     container.insertBefore(eventEl, container.firstChild);
 
@@ -1330,16 +1075,99 @@ class SecureVisionApp {
       });
     }
   }
+
+  /**
+   * Configuração dos controles avançados de calibração de câmera e manutenção do banco
+   */
+  setupSettingsTabControls() {
+    // 1. Slider de Densidade Facial Mínima (Filtro Anti-Fundo / Móveis)
+    const rangeEl = document.getElementById('minFacePixelsRange');
+    const valEl = document.getElementById('valMinFacePixels');
+    if (rangeEl && valEl) {
+      rangeEl.value = window.svBiometrics.minFacePixels || 110;
+      valEl.textContent = `${rangeEl.value} px`;
+
+      rangeEl.addEventListener('input', (e) => {
+        valEl.textContent = `${e.target.value} px`;
+        window.svBiometrics.setMinFacePixels(e.target.value);
+      });
+    }
+
+    // 2. Botão Calibrar / Capturar Fundo Vazio Atual (Background Subtraction)
+    const btnCalib = document.getElementById('btnCalibrateBg');
+    const badgeCalib = document.getElementById('bgCalibBadge');
+    if (btnCalib) {
+      btnCalib.addEventListener('click', () => {
+        const video = document.getElementById('videoFeedCam1') || document.getElementById('enrollmentWebcamPreview');
+        if (!video || video.readyState < 2) {
+          alert('⚠️ Certifique-se de que a câmera esteja conectada e transmitindo vídeo para calibrar o fundo.');
+          return;
+        }
+
+        const success = window.svBiometrics.calibrateBackground(video);
+        if (success) {
+          if (badgeCalib) {
+            badgeCalib.innerHTML = '✅ <strong style="color:#10b981;">Fundo Calibrado e Ativo</strong> (Subtração Dinâmica Ligada)';
+          }
+          alert('📸 Fundo capturado com sucesso!\n\nO sistema memorizou o ambiente sem ninguém na frente. Paredes, portas, móveis de madeira e luzes do fundo serão subtraídos e ignorados, eliminando falsos positivos.');
+        } else {
+          alert('⚠️ Não foi possível capturar o frame de fundo. Verifique se o vídeo da câmera está ativo.');
+        }
+      });
+    }
+
+    // 3. Resetar Calibração de Fundo
+    const btnResetCalib = document.getElementById('btnResetBgCalib');
+    if (btnResetCalib) {
+      btnResetCalib.addEventListener('click', () => {
+        window.svBiometrics.resetBackgroundCalibration();
+        if (badgeCalib) {
+          badgeCalib.textContent = 'Subtração de Fundo: Desativada (Padrão)';
+          badgeCalib.style.color = 'var(--text-dim)';
+        }
+        alert('🔄 Calibração de fundo resetada para o padrão.');
+      });
+    }
+
+    // 4. Limpar Mensagens de Log (Histórico) sem alterar tabela
+    const btnClearLogs = document.getElementById('btnClearLogsBtn');
+    if (btnClearLogs) {
+      btnClearLogs.addEventListener('click', async () => {
+        if (confirm('🧹 Limpeza de Histórico:\n\nDeseja apagar todas as mensagens de logs da central?\n\n(A tabela "logs" permanecerá intacta no banco de dados)')) {
+          btnClearLogs.disabled = true;
+          btnClearLogs.textContent = '🧹 Limpando...';
+          await window.svDB.clearAllLogs();
+          await this.loadLogsUI();
+          const timeline = document.getElementById('stsRecognitionTimeline');
+          if (timeline) timeline.innerHTML = '';
+          btnClearLogs.disabled = false;
+          btnClearLogs.textContent = '🧹 Limpar Mensagens de Logs / Histórico';
+          alert('✅ Mensagens de logs limpas com sucesso! A estrutura da tabela foi preservada.');
+        }
+      });
+    }
+
+    // 5. Limpar Todos os Usuários e Biometrias sem alterar tabela
+    const btnClearUsers = document.getElementById('btnClearUsersBtn');
+    if (btnClearUsers) {
+      btnClearUsers.addEventListener('click', async () => {
+        if (confirm('🗑️ Limpeza de Cadastros:\n\nDeseja excluir todos os usuários cadastrados e dados biométricos?\n\n(As tabelas "users" e "biometrics" permanecerão criadas e prontas no banco)')) {
+          btnClearUsers.disabled = true;
+          btnClearUsers.textContent = '🗑️ Limpando...';
+          await window.svDB.clearAllUserData();
+          await window.svBiometrics.reloadRegisteredUsers();
+          this.loadRegisteredUsersUI();
+          this.refreshStatusTabData();
+          btnClearUsers.disabled = false;
+          btnClearUsers.textContent = '🗑️ Limpar Todos os Usuários e Biometrias';
+          alert('✅ Todos os usuários e biometrias foram excluídos com sucesso! Nenhuma tabela foi alterada.');
+        }
+      });
+    }
+  }
 }
 
-// Global App instance (Tamper-Proof Protected Singleton)
-if (!window.svApp) {
-  Object.defineProperty(window, 'svApp', {
-    value: new SecureVisionApp(),
-    writable: false,
-    configurable: false,
-    enumerable: true
-  });
-}
+// Global App instance
+window.svApp = new SecureVisionApp();
 document.addEventListener('DOMContentLoaded', () => window.svApp.init());
 
