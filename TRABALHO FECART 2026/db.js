@@ -558,7 +558,9 @@ class SecureVisionDB {
           type: logEntry.type,
           category: logEntry.category,
           description: logEntry.description,
-          cam_id: logEntry.camId,
+          cam_id: logEntry.camId || 'SYSTEM',
+          previous_hash: logEntry.previous_hash || null,
+          hash: logEntry.hash || null,
           created_at: new Date().toISOString()
         })
       });
