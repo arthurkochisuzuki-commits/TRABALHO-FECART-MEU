@@ -81,7 +81,7 @@ ALTER TABLE public.biometrics ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.logs ENABLE ROW LEVEL SECURITY;
 
 -- ------------------------------------------------------------------------------
--- 7. POLÍTICAS RLS: TABELA 'users'
+-- 7. POLÍTICAS RLS: TABELA 'users' (Zero-Trust: Anon Read-Only / Auth Write)
 -- ------------------------------------------------------------------------------
 DROP POLICY IF EXISTS "Users_Select_Policy" ON public.users;
 CREATE POLICY "Users_Select_Policy" ON public.users
@@ -90,22 +90,22 @@ CREATE POLICY "Users_Select_Policy" ON public.users
 
 DROP POLICY IF EXISTS "Users_Insert_Policy" ON public.users;
 CREATE POLICY "Users_Insert_Policy" ON public.users
-  FOR INSERT TO anon, authenticated
+  FOR INSERT TO authenticated
   WITH CHECK (length(id) > 0 AND length(name) > 0 AND length(cpf_hash) > 0);
 
 DROP POLICY IF EXISTS "Users_Update_Policy" ON public.users;
 CREATE POLICY "Users_Update_Policy" ON public.users
-  FOR UPDATE TO anon, authenticated
+  FOR UPDATE TO authenticated
   USING (true)
   WITH CHECK (length(name) > 0);
 
 DROP POLICY IF EXISTS "Users_Delete_Policy" ON public.users;
 CREATE POLICY "Users_Delete_Policy" ON public.users
-  FOR DELETE TO anon, authenticated
+  FOR DELETE TO authenticated
   USING (true);
 
 -- ------------------------------------------------------------------------------
--- 8. POLÍTICAS RLS: TABELA 'biometrics'
+-- 8. POLÍTICAS RLS: TABELA 'biometrics' (Zero-Trust: Anon Read-Only / Auth Write)
 -- ------------------------------------------------------------------------------
 DROP POLICY IF EXISTS "Biometrics_Select_Policy" ON public.biometrics;
 CREATE POLICY "Biometrics_Select_Policy" ON public.biometrics
@@ -114,21 +114,21 @@ CREATE POLICY "Biometrics_Select_Policy" ON public.biometrics
 
 DROP POLICY IF EXISTS "Biometrics_Insert_Policy" ON public.biometrics;
 CREATE POLICY "Biometrics_Insert_Policy" ON public.biometrics
-  FOR INSERT TO anon, authenticated
+  FOR INSERT TO authenticated
   WITH CHECK (length(user_id) > 0);
 
 DROP POLICY IF EXISTS "Biometrics_Update_Policy" ON public.biometrics;
 CREATE POLICY "Biometrics_Update_Policy" ON public.biometrics
-  FOR UPDATE TO anon, authenticated
+  FOR UPDATE TO authenticated
   USING (true);
 
 DROP POLICY IF EXISTS "Biometrics_Delete_Policy" ON public.biometrics;
 CREATE POLICY "Biometrics_Delete_Policy" ON public.biometrics
-  FOR DELETE TO anon, authenticated
+  FOR DELETE TO authenticated
   USING (true);
 
 -- ------------------------------------------------------------------------------
--- 9. POLÍTICAS RLS: TABELA 'logs' (IMUTÁVEL)
+-- 9. POLÍTICAS RLS: TABELA 'logs' (IMUTÁVEL: Insert restrito / Update e Delete proibidos)
 -- ------------------------------------------------------------------------------
 DROP POLICY IF EXISTS "Logs_Select_Policy" ON public.logs;
 CREATE POLICY "Logs_Select_Policy" ON public.logs
@@ -140,7 +140,7 @@ CREATE POLICY "Logs_Insert_Policy" ON public.logs
   FOR INSERT TO anon, authenticated
   WITH CHECK (length(category) > 0 AND length(description) > 0);
 
--- Explicitamente bloqueia UPDATE e DELETE nas políticas de RLS de logs
+-- Explicitamente bloqueia UPDATE e DELETE nas políticas de RLS de logs para todos os papéis
 DROP POLICY IF EXISTS "Logs_Deny_Update" ON public.logs;
 CREATE POLICY "Logs_Deny_Update" ON public.logs
   FOR UPDATE TO anon, authenticated

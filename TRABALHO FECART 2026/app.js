@@ -950,14 +950,37 @@ class SecureVisionApp {
       }
 
       const textDiv = document.createElement('div');
-      const statusBadge = isBlocked
-        ? `<span style="font-size:0.7rem; color:#ef4444; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.4); padding:2px 8px; border-radius:4px; font-weight:700;">🚫 BLOQUEADO (LISTA NEGRA)</span>`
-        : `<span style="font-size:0.7rem; color:#10b981; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.4); padding:2px 8px; border-radius:4px; font-weight:700;">✓ AUTORIZADO</span> <span style="font-size:0.7rem; color:#06b6d4; background:rgba(6,182,212,0.1); padding:2px 6px; border-radius:4px;">${safeRole}</span>`;
+      
+      const titleRow = document.createElement('div');
+      titleRow.style.cssText = 'color:var(--text-main); font-weight:600; font-size:0.9rem; display:flex; align-items:center; gap:6px; flex-wrap:wrap;';
+      
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = u.name;
+      titleRow.appendChild(nameSpan);
 
-      textDiv.innerHTML = `
-        <div style="color:var(--text-main); font-weight:600; font-size:0.9rem;">${safeName} ${statusBadge}</div>
-        <div style="font-size:0.75rem; color:var(--text-muted); margin-top:3px;">Fontes Biométricas: ${sourcesCount} Mídias | CPF: Criptografado AES-256 (SHA-256 Hash) | LGPD Consent: ${new Date(u.lgpdConsent ? u.lgpdConsent.timestamp : Date.now()).toLocaleDateString()}</div>
-      `;
+      const statusBadge = document.createElement('span');
+      if (isBlocked) {
+        statusBadge.style.cssText = 'font-size:0.7rem; color:#ef4444; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.4); padding:2px 8px; border-radius:4px; font-weight:700;';
+        statusBadge.textContent = '🚫 BLOQUEADO (LISTA NEGRA)';
+        titleRow.appendChild(statusBadge);
+      } else {
+        statusBadge.style.cssText = 'font-size:0.7rem; color:#10b981; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.4); padding:2px 8px; border-radius:4px; font-weight:700;';
+        statusBadge.textContent = '✓ AUTORIZADO';
+        
+        const roleBadge = document.createElement('span');
+        roleBadge.style.cssText = 'font-size:0.7rem; color:#06b6d4; background:rgba(6,182,212,0.1); padding:2px 6px; border-radius:4px; font-weight:500;';
+        roleBadge.textContent = u.role || 'Funcionário';
+        
+        titleRow.appendChild(statusBadge);
+        titleRow.appendChild(roleBadge);
+      }
+      textDiv.appendChild(titleRow);
+
+      const subMeta = document.createElement('div');
+      subMeta.style.cssText = 'font-size:0.75rem; color:var(--text-muted); margin-top:3px;';
+      const lgpdDate = new Date(u.lgpdConsent ? u.lgpdConsent.timestamp : Date.now()).toLocaleDateString();
+      subMeta.textContent = `Fontes Biométricas: ${sourcesCount} Mídias | CPF: Criptografado AES-256 (SHA-256 Hash) | LGPD Consent: ${lgpdDate}`;
+      textDiv.appendChild(subMeta);
       leftDiv.appendChild(textDiv);
 
       const delBtn = document.createElement('button');
@@ -1005,14 +1028,30 @@ class SecureVisionApp {
     if (log.type === 'SUCCESS') { badgeClass = 'success'; icon = '✓'; }
     if (log.type === 'SCAN') { badgeClass = 'scan'; icon = '🔄'; }
 
-    card.innerHTML = `
-      <div class="log-meta">
-        <span>${this.escapeHTML(log.timestamp)}</span>
-        <span class="cam-tag">${this.escapeHTML(log.camId)}</span>
-      </div>
-      <div class="log-badge ${badgeClass}">${icon} ${this.escapeHTML(log.category)}</div>
-      <div class="log-desc">${this.escapeHTML(log.description)}</div>
-    `;
+    const metaDiv = document.createElement('div');
+    metaDiv.className = 'log-meta';
+    
+    const timeSpan = document.createElement('span');
+    timeSpan.textContent = log.timestamp || '';
+    
+    const camSpan = document.createElement('span');
+    camSpan.className = 'cam-tag';
+    camSpan.textContent = log.camId || 'SYSTEM';
+
+    metaDiv.appendChild(timeSpan);
+    metaDiv.appendChild(camSpan);
+
+    const badgeDiv = document.createElement('div');
+    badgeDiv.className = `log-badge ${badgeClass}`;
+    badgeDiv.textContent = `${icon} ${log.category || ''}`;
+
+    const descDiv = document.createElement('div');
+    descDiv.className = 'log-desc';
+    descDiv.textContent = log.description || '';
+
+    card.appendChild(metaDiv);
+    card.appendChild(badgeDiv);
+    card.appendChild(descDiv);
 
     listEl.insertBefore(card, listEl.firstChild);
   }
@@ -1153,12 +1192,31 @@ class SecureVisionApp {
 
     const eventEl = document.createElement('div');
     eventEl.className = 'timeline-event';
-    eventEl.innerHTML = `
-      <span class="tl-time">${this.escapeHTML(timeStr)}</span>
-      <span class="tl-icon">${icon}</span>
-      <span class="tl-text"><strong>${this.escapeHTML(name)}</strong> — Cosseno: ${this.escapeHTML(String(cosine))} | Confiança: ${this.escapeHTML(String(confidence))}%</span>
-      <span class="tl-badge ${badgeClass}">${badgeText}</span>
-    `;
+
+    const timeSpan = document.createElement('span');
+    timeSpan.className = 'tl-time';
+    timeSpan.textContent = timeStr;
+
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'tl-icon';
+    iconSpan.textContent = icon;
+
+    const textSpan = document.createElement('span');
+    textSpan.className = 'tl-text';
+
+    const strongName = document.createElement('strong');
+    strongName.textContent = name || '';
+    textSpan.appendChild(strongName);
+    textSpan.appendChild(document.createTextNode(` — Cosseno: ${cosine || '0.000'} | Confiança: ${confidence || '0'}%`));
+
+    const badgeSpan = document.createElement('span');
+    badgeSpan.className = `tl-badge ${badgeClass}`;
+    badgeSpan.textContent = badgeText;
+
+    eventEl.appendChild(timeSpan);
+    eventEl.appendChild(iconSpan);
+    eventEl.appendChild(textSpan);
+    eventEl.appendChild(badgeSpan);
 
     container.insertBefore(eventEl, container.firstChild);
 

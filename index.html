@@ -3,7 +3,106 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://*.supabase.co;">
   <title>SecureVision AI - Painel de Vigilância Integrado 24H</title>
+  
+  <!-- Kiosk Security & Anti-DevTools Active Shield (F12 / Console / Inspection Blocker) -->
+  <script>
+    (function() {
+      // 1. Bloqueio Imediato de Teclas (F12, Ctrl+Shift+I/J/C, Ctrl+U, Ctrl+S)
+      function blockInspectionKeys(e) {
+        var key = e.key || '';
+        var code = e.keyCode || e.which || 0;
+        
+        var isF12 = key === 'F12' || code === 123;
+        var isCtrlShiftI = (e.ctrlKey || e.metaKey) && e.shiftKey && (key === 'I' || key === 'i' || code === 73);
+        var isCtrlShiftJ = (e.ctrlKey || e.metaKey) && e.shiftKey && (key === 'J' || key === 'j' || code === 74);
+        var isCtrlShiftC = (e.ctrlKey || e.metaKey) && e.shiftKey && (key === 'C' || key === 'c' || code === 67);
+        var isCtrlU = (e.ctrlKey || e.metaKey) && (key === 'U' || key === 'u' || code === 85);
+        var isCtrlS = (e.ctrlKey || e.metaKey) && (key === 'S' || key === 's' || code === 83);
+
+        if (isF12 || isCtrlShiftI || isCtrlShiftJ || isCtrlShiftC || isCtrlU || isCtrlS) {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          if (window.svDB && window.svDB.addLog) {
+            window.svDB.addLog('DANGER', 'BLOQUEIO DE DEVTOOLS', 'Tentativa de inspeção (F12 / Console) bloqueada pelo sistema.', 'KIOSK');
+          }
+          return false;
+        }
+      }
+
+      window.addEventListener('keydown', blockInspectionKeys, true);
+      window.addEventListener('keyup', blockInspectionKeys, true);
+      document.addEventListener('keydown', blockInspectionKeys, true);
+      document.addEventListener('keyup', blockInspectionKeys, true);
+
+      // 2. Bloqueio de Botão Direito e Arrastar Elementos
+      window.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return false;
+      }, true);
+
+      window.addEventListener('dragstart', function(e) {
+        e.preventDefault();
+        return false;
+      }, true);
+
+      // 3. Anti-Debugger Trap & Detecção de Abertura de DevTools (Acoplado e Desacoplado)
+      var isDevToolsOpen = false;
+
+      // Método A: Verificação de dimensão de janela (Docked DevTools)
+      function checkDockedDevTools() {
+        var threshold = 160;
+        return (window.outerWidth - window.innerWidth > threshold) || 
+               (window.outerHeight - window.innerHeight > threshold);
+      }
+
+      // Método B: Console Getter Detector (Undocked DevTools)
+      var elementTrap = new Image();
+      Object.defineProperty(elementTrap, 'id', {
+        get: function() {
+          isDevToolsOpen = true;
+        }
+      });
+
+      var devtoolsDetectorTimer = setInterval(function() {
+        isDevToolsOpen = checkDockedDevTools();
+
+        // Dispara trigger de console para pegar janela desacoplada
+        try {
+          console.log('%c', elementTrap);
+          console.clear();
+        } catch (e) {}
+
+        var warningEl = document.getElementById('devtoolsLockdownOverlay');
+        if (isDevToolsOpen) {
+          if (!warningEl) {
+            warningEl = document.createElement('div');
+            warningEl.id = 'devtoolsLockdownOverlay';
+            warningEl.style.cssText = 'position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(11,15,25,0.98); z-index:999999; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff; text-align:center; padding:20px; font-family:Inter, sans-serif;';
+            warningEl.innerHTML = `
+              <div style="font-size:3.5rem; margin-bottom:12px;">🚫</div>
+              <h1 style="color:#ef4444; font-size:1.8rem; margin-bottom:8px; font-weight:800;">ACESSO NEGADO - MODO KIOSK ATIVO</h1>
+              <p style="color:#94a3b8; font-size:0.95rem; max-width:550px; line-height:1.5;">
+                O painel de desenvolvedor (DevTools/F12) foi detectado aberto. Por diretrizes de segurança e conformidade da central de vigilância, feche o painel de inspeção para desbloquear a interface.
+              </p>
+            `;
+            document.body.appendChild(warningEl);
+          }
+          // Congela a depuração
+          try { Function('debugger')(); } catch (err) {}
+        } else {
+          if (warningEl && warningEl.parentNode) {
+            warningEl.parentNode.removeChild(warningEl);
+          }
+        }
+      }, 400);
+    })();
+  </script>
+
   <link rel="stylesheet" href="styles.css">
   <script src="https://unpkg.com/lucide@latest"></script>
 </head>
@@ -242,18 +341,18 @@
             <!-- PAINEL EM TEMPO REAL: STATUS DE IDENTIDADE E PAUSA AUTOMÁTICA -->
             <div class="identity-status-banner paused" id="realtimeIdentityBanner">
               <div class="identity-info-group">
-                <div style="font-size:1.8rem;" id="identityStatusIcon">👁️</div>
+                <div style="font-size:1.8rem;" id="identityStatusIcon">⏸️</div>
                 <div>
                   <div class="identity-badge-title" id="identityStatusTitle" style="color:var(--text-dim);">
-                    AGUARDANDO PRESENÇA FACIAL
+                    NENHUMA PESSOA DETECTADA NA CÂMERA
                   </div>
                   <div class="identity-subtext" id="identityStatusSub">
-                    Nenhum rosto visível em frente à câmera. Posicione-se para identificação biométrica.
+                    Sistema em Pausa Automática (Economizando recursos de CPU/GPU). Aguardando presença em frente à câmera.
                   </div>
                 </div>
               </div>
               <div class="badge-secure" id="identityStatusBadge" style="background:rgba(100,116,139,0.15); border-color:#64748b; color:#94a3b8;">
-                EM ESPERA
+                PAUSADO
               </div>
             </div>
 
@@ -277,6 +376,7 @@
               <!-- Feed 1: Main Lobby (DYNAMIC FACE TRACKER) -->
               <div class="camera-card" id="cardCam1">
                 <div class="camera-header">
+                  <span class="cam-tag" id="tagCam1">CAM_01 · Main Lobby</span>
                   <span style="color:#10b981; font-size:0.7rem; font-weight:700;" id="statusCam1">● LIVE STREAM</span>
                 </div>
                 <div class="cam-feed-container" id="containerCam1">
@@ -552,6 +652,26 @@
                 </div>
 
                 <button class="btn-action" id="btnSaveSupabase" style="width:100%; justify-content:center; margin-top:6px;">💾 Salvar & Sincronizar Supabase</button>
+              </div>
+
+              <!-- Card 5: Backup e Exportação Segura (Zero-Knowledge) -->
+              <div class="settings-card">
+                <div class="settings-card-title">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                  Backup Criptografado por Senha (Zero-Knowledge)
+                </div>
+
+                <p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:12px;">
+                  Exportação protegida por senha mestre via <strong>AES-GCM 256-bit</strong> e assinatura criptográfica <strong>SHA-256</strong>. Os dados só podem ser lidos mediante inserção da senha correspondente.
+                </p>
+
+                <div style="display:flex; flex-direction:column; gap:8px;">
+                  <button class="btn-action" id="btnExportBackup" style="width:100%; justify-content:center;">🔐 Exportar Cofre Criptografado (JSON)</button>
+                  <label class="btn-outline" style="width:100%; justify-content:center; display:flex; align-items:center; cursor:pointer; font-size:0.8rem; padding:8px 14px; text-align:center;">
+                    📥 Restaurar Cofre de Backup
+                    <input type="file" id="inputImportBackup" accept=".json" style="display:none;">
+                  </label>
+                </div>
               </div>
 
             </div>

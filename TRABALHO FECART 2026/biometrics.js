@@ -239,19 +239,33 @@ class BiometricsEngine {
     let minX = 160, maxX = 0, minY = 120, maxY = 0;
     let facePixels = 0;
 
-    for (let y = 10; y < 110; y++) {
-      for (let x = 10; x < 150; x++) {
+    for (let y = 8; y < 112; y += 2) {
+      for (let x = 8; x < 152; x += 2) {
         const idx = (y * 160 + x) * 4;
         const r = data[idx];
         const g = data[idx + 1];
         const b = data[idx + 2];
 
-        const max = Math.max(r, g, b);
-        const min = Math.min(r, g, b);
+        // 1. Convert RGB to standardized YCbCr space (ITU-R BT.601)
+        const Y  =  0.299 * r + 0.587 * g + 0.114 * b;
+        const Cb = -0.1687 * r - 0.3313 * g + 0.5 * b + 128;
+        const Cr =  0.5 * r - 0.4187 * g - 0.0813 * b + 128;
 
-        const isSkin = (r > 40 && g > 20 && b > 10 && (max - min > 8) && (r >= g));
-        
-        if (isSkin) {
+        // 2. Multi-Ethnic Adaptive Chromaticity & Dynamic Lighting Envelope
+        // Invariant across fair, olive, brown, and dark skin tones (Fitzpatrick scale I-VI)
+        // Cr-Cb elliptical bound + broad luminance acceptance (Y >= 18)
+        const isYCbCrSkin = (Y >= 18) && 
+                            (Cr >= 130 && Cr <= 178) && 
+                            (Cb >= 75 && Cb <= 135) && 
+                            ((Cr - Cb) >= -5 && (Cr - Cb) <= 70);
+
+        // 3. Normalized RGB heuristic fallback for non-standard LED lighting
+        const sumRGB = r + g + b || 1;
+        const normR = r / sumRGB;
+        const normG = g / sumRGB;
+        const isNormSkin = (normR > 0.33 && normR < 0.60) && (normG > 0.25 && normG < 0.38) && (r > b);
+
+        if (isYCbCrSkin || isNormSkin) {
           facePixels++;
           weightedX += x;
           weightedY += y;
