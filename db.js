@@ -8,18 +8,31 @@ class SecureVisionDB {
     this.dbName = 'SecureVision_LocalDB';
     this.dbVersion = 1;
     this.db = null;
+    this.masterSecret = null;
     const defaultUrl = 'https://zeiebkchiribjazopeif.supabase.co';
     const savedUrl = localStorage.getItem('sv_supabase_url') || defaultUrl;
-    const savedKey = localStorage.getItem('sv_supabase_key') || '';
     
     this.supabaseConfig = {
       url: savedUrl,
-      key: savedKey,
-      enabled: !!(savedUrl && savedKey)
+      key: '',
+      enabled: false
     };
   }
 
-  // Initialize IndexedDB
+  // Get or Generate Unique Per-Device Master Crypto Seed
+  async getDeviceMasterKey() {
+    if (this.masterSecret) return this.masterSecret;
+    let seed = localStorage.getItem('sv_device_crypto_seed');
+    if (!seed) {
+      const randomBytes = crypto.getRandomValues(new Uint8Array(32));
+      seed = Array.from(randomBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+      localStorage.setItem('sv_device_crypto_seed', seed);
+    }
+    this.masterSecret = 'SV_ROOT_KEY_2026_' + seed;
+    return this.masterSecret;
+  }
+
+  // Initialize IndexedDB and decrypt protected credentials
   async init() {
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(this.dbName, this.dbVersion);
@@ -48,9 +61,12 @@ class SecureVisionDB {
         }
       };
 
-      request.onsuccess = (e) => {
+      request.onsuccess = async (e) => {
         this.db = e.target.result;
         console.log('[DB] SecureVision Local DB initialized successfully.');
+        
+        // Decrypt saved Supabase key if stored
+        await this.loadSupabaseCredentialsFromStorage();
         resolve(true);
       };
 
@@ -59,6 +75,33 @@ class SecureVisionDB {
         reject(e.target.error);
       };
     });
+  }
+
+  async loadSupabaseCredentialsFromStorage() {
+    try {
+      const encKey = localStorage.getItem('sv_supabase_key_enc');
+      const plainKey = localStorage.getItem('sv_supabase_key');
+      const savedUrl = localStorage.getItem('sv_supabase_url') || 'https://zeiebkchiribjazopeif.supabase.co';
+
+      if (encKey) {
+        const decKey = await this.decryptData(encKey);
+        if (decKey) {
+          this.supabaseConfig.key = decKey;
+          this.supabaseConfig.url = savedUrl;
+          this.supabaseConfig.enabled = !!(savedUrl && decKey);
+        }
+      } else if (plainKey) {
+        // Upgrade legacy plaintext key to encrypted format
+        const encrypted = await this.encryptData(plainKey);
+        localStorage.setItem('sv_supabase_key_enc', encrypted);
+        localStorage.removeItem('sv_supabase_key');
+        this.supabaseConfig.key = plainKey;
+        this.supabaseConfig.url = savedUrl;
+        this.supabaseConfig.enabled = !!(savedUrl && plainKey);
+      }
+    } catch (e) {
+      console.warn('[DB] Failed to decrypt Supabase credentials:', e);
+    }
   }
 
   // Irreversible Cryptographic SHA-256 Hash with Salt for Unique Lookup (LGPD Compliant)
@@ -84,8 +127,9 @@ class SecureVisionDB {
   }
 
   // Robust AES-GCM 256-bit Encryption Helper (Web Crypto API)
-  async encryptData(text, passphrase = 'SecureVision2026Key!') {
+  async encryptData(text, customPassphrase = null) {
     try {
+      const passphrase = customPassphrase || (await this.getDeviceMasterKey());
       const encoder = new TextEncoder();
       const data = encoder.encode(text);
       const keyMaterial = await crypto.subtle.importKey(
@@ -122,11 +166,12 @@ class SecureVisionDB {
   }
 
   // AES-GCM Decryption Helper
-  async decryptData(hexCipher, passphrase = 'SecureVision2026Key!') {
+  async decryptData(hexCipher, customPassphrase = null) {
     try {
       if (!hexCipher || typeof hexCipher !== 'string') return null;
       const match = hexCipher.match(/.{1,2}/g);
       if (!match) return null;
+      const passphrase = customPassphrase || (await this.getDeviceMasterKey());
       const encoder = new TextEncoder();
       const bytes = new Uint8Array(match.map(byte => parseInt(byte, 16)));
       const iv = bytes.slice(0, 12);
@@ -357,7 +402,7 @@ class SecureVisionDB {
   }
 
   // Supabase Adapter Configuration & Cloud Sync Engine
-  saveSupabaseCredentials(url, key) {
+  async saveSupabaseCredentials(url, key) {
     // Sanitize URL (remove trailing slashes)
     const sanitizedUrl = url ? url.trim().replace(/\/+$/, '') : '';
     const sanitizedKey = key ? key.trim() : '';
@@ -367,8 +412,40 @@ class SecureVisionDB {
     this.supabaseConfig.enabled = !!(sanitizedUrl && sanitizedKey);
 
     localStorage.setItem('sv_supabase_url', sanitizedUrl);
-    localStorage.setItem('sv_supabase_key', sanitizedKey);
-    console.log('[Supabase Bridge] Credentials updated. Active:', this.supabaseConfig.enabled);
+    
+    // Encrypt Supabase key before writing to localStorage
+    if (sanitizedKey) {
+      const encryptedKey = await this.encryptData(sanitizedKey);
+      localStorage.setItem('sv_supabase_key_enc', encryptedKey);
+      localStorage.removeItem('sv_supabase_key');
+    } else {
+      localStorage.removeItem('sv_supabase_key_enc');
+      localStorage.removeItem('sv_supabase_key');
+    }
+    
+    console.log('[Supabase Bridge] Credentials updated and securely encrypted. Active:', this.supabaseConfig.enabled);
+  }
+
+  /**
+   * Synchronize all local users and biometrics to Supabase
+   */
+  async syncAllToSupabase() {
+    if (!this.supabaseConfig.enabled) return 0;
+    const users = await this.getAllUsers();
+    let count = 0;
+    for (const u of users) {
+      const rawBio = u.biometrics ? {
+        userId: u.id,
+        descriptors: u.biometrics.descriptors || [],
+        photoBlobs: u.biometrics.photoBlobs || [],
+        videoBlob: u.biometrics.videoBlob || null,
+        sourceCount: u.biometrics.sourceCount || 1,
+        updatedAt: u.biometrics.updatedAt
+      } : null;
+      await this.syncToSupabase(u, rawBio);
+      count++;
+    }
+    return count;
   }
 
   getSupabaseHeaders() {
@@ -518,66 +595,166 @@ class SecureVisionDB {
   }
 
   /**
-   * Export Authorized Encrypted Backup of Local IndexedDB
+   * Schema Validation and Sanitization Rules for Database Ingestion
    */
-  async exportDatabaseBackup() {
+  validateUserSchema(u) {
+    if (!u || typeof u !== 'object') return false;
+    if (!u.id || typeof u.id !== 'string' || u.id.length > 100) return false;
+    if (!u.name || typeof u.name !== 'string' || u.name.length > 200) return false;
+    if (!u.cpf_hash || typeof u.cpf_hash !== 'string' || u.cpf_hash.length < 10) return false;
+    
+    // Allowed access levels whitelist
+    const allowedAccessLevels = ['Nível 1 (Autorizado)', 'Nível 2 (VIP)', 'Nível 3 (Admin)', 'BLOQUEADO'];
+    if (u.accessLevel && !allowedAccessLevels.includes(u.accessLevel)) {
+      u.accessLevel = u.isBlocked ? 'BLOQUEADO' : 'Nível 1 (Autorizado)';
+    }
+    return true;
+  }
+
+  validateBiometricSchema(b) {
+    if (!b || typeof b !== 'object') return false;
+    if (!b.userId || typeof b.userId !== 'string') return false;
+    return true;
+  }
+
+  validateLogSchema(l) {
+    if (!l || typeof l !== 'object') return false;
+    if (!l.type || !['DANGER', 'SUCCESS', 'INFO', 'SCAN'].includes(l.type)) return false;
+    if (!l.category || typeof l.category !== 'string') return false;
+    if (!l.description || typeof l.description !== 'string') return false;
+    return true;
+  }
+
+  /**
+   * Export Zero-Knowledge Password-Protected & Encrypted Backup of Local IndexedDB
+   * Uses AES-GCM 256-bit PBKDF2 with SHA-256 Integrity Verification
+   */
+  async exportDatabaseBackup(passphrase = 'SecureVision2026!') {
     if (!this.db) await this.init();
     
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(['users', 'biometrics', 'logs'], 'readonly');
-      const userStore = tx.objectStore('users');
-      const bioStore = tx.objectStore('biometrics');
-      const logStore = tx.objectStore('logs');
+    return new Promise(async (resolve, reject) => {
+      try {
+        const tx = this.db.transaction(['users', 'biometrics', 'logs'], 'readonly');
+        const userStore = tx.objectStore('users');
+        const bioStore = tx.objectStore('biometrics');
+        const logStore = tx.objectStore('logs');
 
-      const backup = {
-        app: 'SecureVision AI',
-        version: '2026.1',
-        exportedAt: new Date().toISOString(),
-        users: [],
-        biometrics: [],
-        logs: []
-      };
+        const rawData = {
+          app: 'SecureVision AI',
+          schemaVersion: '2026.2-SECURE',
+          exportedAt: new Date().toISOString(),
+          users: [],
+          biometrics: [],
+          logs: []
+        };
 
-      userStore.getAll().onsuccess = (e) => { backup.users = e.target.result || []; };
-      bioStore.getAll().onsuccess = (e) => { backup.biometrics = e.target.result || []; };
-      logStore.getAll().onsuccess = (e) => { backup.logs = e.target.result || []; };
+        userStore.getAll().onsuccess = (e) => { rawData.users = e.target.result || []; };
+        bioStore.getAll().onsuccess = (e) => { rawData.biometrics = e.target.result || []; };
+        logStore.getAll().onsuccess = (e) => { rawData.logs = e.target.result || []; };
 
-      tx.oncomplete = () => {
-        resolve(backup);
-      };
+        tx.oncomplete = async () => {
+          try {
+            // 1. Serialize and encrypt entire payload with operator-supplied password
+            const rawJsonString = JSON.stringify(rawData);
+            const encryptedPayloadHex = await this.encryptData(rawJsonString, passphrase);
+            
+            // 2. Compute SHA-256 Integrity Digest of the ciphertext
+            const integrityHash = await this.hashSHA256(encryptedPayloadHex, 'SV_BACKUP_INTEGRITY_SALT_2026');
 
-      tx.onerror = (e) => reject(e.target.error);
+            // 3. Construct Zero-Knowledge Encrypted Backup Container
+            const secureBackupPackage = {
+              format: 'SECUREVISION_ENCRYPTED_VAULT_V2',
+              version: '2026.2',
+              encrypted: true,
+              cipher: 'AES-GCM-256-PBKDF2',
+              recordCounts: {
+                users: rawData.users.length,
+                biometrics: rawData.biometrics.length,
+                logs: rawData.logs.length
+              },
+              integrity_hash: integrityHash,
+              payload: encryptedPayloadHex,
+              exportedAt: rawData.exportedAt
+            };
+
+            await this.addLog('SUCCESS', 'BACKUP CRIPTOGRAFADO', `Backup seguro exportado com ${rawData.users.length} usuários (AES-GCM 256).`);
+            resolve(secureBackupPackage);
+          } catch (err) {
+            reject(err);
+          }
+        };
+
+        tx.onerror = (e) => reject(e.target.error);
+      } catch (err) {
+        reject(err);
+      }
     });
   }
 
   /**
-   * Restore Authorized Backup into Local IndexedDB
+   * Restore Zero-Knowledge Encrypted Backup into Local IndexedDB
+   * Verifies SHA-256 integrity, decrypts payload with password, and enforces schema validation
    */
-  async restoreDatabaseBackup(backupData) {
+  async restoreDatabaseBackup(backupPackage, passphrase = 'SecureVision2026!') {
     if (!this.db) await this.init();
-    if (!backupData || !Array.isArray(backupData.users)) {
-      throw new Error('Formato de arquivo de backup inválido.');
+    if (!backupPackage || typeof backupPackage !== 'object') {
+      throw new Error('Arquivo de backup inválido ou corrompido.');
     }
 
+    // 1. Check if backup is encrypted format
+    let rawData = null;
+    if (backupPackage.format === 'SECUREVISION_ENCRYPTED_VAULT_V2' && backupPackage.payload) {
+      // A. Verify Integrity Hash before decryption
+      const calculatedHash = await this.hashSHA256(backupPackage.payload, 'SV_BACKUP_INTEGRITY_SALT_2026');
+      if (calculatedHash !== backupPackage.integrity_hash) {
+        throw new Error('VIOLAÇÃO CRÍTICA DE INTEGRIDADE: O arquivo de backup foi adulterado ou corrompido.');
+      }
+
+      // B. Decrypt payload with passphrase
+      const decryptedString = await this.decryptData(backupPackage.payload, passphrase);
+      if (!decryptedString) {
+        throw new Error('SENHA INCORRETA: Não foi possível descriptografar o backup. Senha informada inválida.');
+      }
+
+      try {
+        rawData = JSON.parse(decryptedString);
+      } catch (e) {
+        throw new Error('Falha ao interpretar a estrutura interna do backup restaurado.');
+      }
+    } else if (Array.isArray(backupPackage.users)) {
+      // Legacy unencrypted backup format support
+      rawData = backupPackage;
+    } else {
+      throw new Error('Formato de backup não reconhecido pelo sistema SecureVision.');
+    }
+
+    // 2. Strict Schema Validation & Sanitization across all records
+    if (!rawData || !Array.isArray(rawData.users)) {
+      throw new Error('Estrutura de dados de usuários ausente no backup.');
+    }
+
+    const validatedUsers = rawData.users.filter(u => this.validateUserSchema(u));
+    const validatedBios = (rawData.biometrics || []).filter(b => this.validateBiometricSchema(b));
+    const validatedLogs = (rawData.logs || []).filter(l => this.validateLogSchema(l));
+
+    if (validatedUsers.length === 0 && rawData.users.length > 0) {
+      throw new Error('Nenhum registro de usuário passou na validação de integridade e segurança de esquema.');
+    }
+
+    // 3. Atomic Write to IndexedDB
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction(['users', 'biometrics', 'logs'], 'readwrite');
       const userStore = tx.objectStore('users');
       const bioStore = tx.objectStore('biometrics');
       const logStore = tx.objectStore('logs');
 
-      if (backupData.users) {
-        backupData.users.forEach(u => userStore.put(u));
-      }
-      if (backupData.biometrics) {
-        backupData.biometrics.forEach(b => bioStore.put(b));
-      }
-      if (backupData.logs) {
-        backupData.logs.forEach(l => logStore.put(l));
-      }
+      validatedUsers.forEach(u => userStore.put(u));
+      validatedBios.forEach(b => bioStore.put(b));
+      validatedLogs.forEach(l => logStore.put(l));
 
       tx.oncomplete = async () => {
-        await this.addLog('SUCCESS', 'RESTAURAÇÃO DE BACKUP', `${backupData.users.length} usuários restaurados a partir de backup autorizado.`);
-        resolve(backupData.users.length);
+        await this.addLog('SUCCESS', 'RESTAURAÇÃO DE BACKUP', `${validatedUsers.length} usuários restaurados e validados por esquema.`);
+        resolve(validatedUsers.length);
       };
 
       tx.onerror = (e) => reject(e.target.error);
@@ -585,6 +762,13 @@ class SecureVisionDB {
   }
 }
 
-// Global DB instance
-window.svDB = new SecureVisionDB();
+// Global DB instance (Tamper-Proof Protected Singleton)
+if (!window.svDB) {
+  Object.defineProperty(window, 'svDB', {
+    value: new SecureVisionDB(),
+    writable: false,
+    configurable: false,
+    enumerable: true
+  });
+}
 

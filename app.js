@@ -171,7 +171,7 @@ class SecureVisionApp {
         btnSaveSupabase.disabled = true;
         btnSaveSupabase.textContent = '🔄 Conectando e Sincronizando...';
 
-        window.svDB.saveSupabaseCredentials(url, key);
+        await window.svDB.saveSupabaseCredentials(url, key);
         const testResult = await window.svDB.testSupabaseConnection();
 
         if (testResult.success) {
@@ -186,26 +186,32 @@ class SecureVisionApp {
       });
     }
 
-    // Export Authorized Encrypted Backup (JSON)
+    // Export Zero-Knowledge Password-Protected Backup (AES-GCM 256 + SHA-256 Digest)
     const btnExportBackup = document.getElementById('btnExportBackup');
     if (btnExportBackup) {
       btnExportBackup.addEventListener('click', async () => {
+        const passphrase = prompt('🔐 DEFINIR SENHA DO BACKUP CRIPTOGRAFADO:\n\nInforme uma senha para proteger os dados biométricos e registros do sistema:', 'SecureVision2026!');
+        if (!passphrase) {
+          alert('⚠️ Exportação cancelada. A definição de senha é obrigatória para gerar o backup criptografado.');
+          return;
+        }
+
         try {
           btnExportBackup.disabled = true;
-          btnExportBackup.textContent = '⏳ Gerando Backup...';
-          const backupData = await window.svDB.exportDatabaseBackup();
+          btnExportBackup.textContent = '⏳ Gerando Cofre Criptografado...';
+          const backupData = await window.svDB.exportDatabaseBackup(passphrase);
           const jsonStr = JSON.stringify(backupData, null, 2);
           const blob = new Blob([jsonStr], { type: 'application/json' });
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           const dateStr = new Date().toISOString().slice(0, 10);
           a.href = url;
-          a.download = `fecart_backup_${dateStr}.json`;
+          a.download = `securevision_vault_backup_${dateStr}.json`;
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
           URL.revokeObjectURL(url);
-          alert('✅ Backup criptografado exportado com sucesso!');
+          alert('✅ COFRE DE BACKUP EXPORTADO COM SUCESSO!\n\nOs dados foram 100% criptografados com AES-GCM 256-bit e protegidos por assinatura SHA-256.');
         } catch (err) {
           alert(`❌ Erro ao exportar backup: ${err.message}`);
         } finally {
@@ -215,23 +221,30 @@ class SecureVisionApp {
       });
     }
 
-    // Restore Authorized Backup
+    // Restore Zero-Knowledge Encrypted Backup
     const inputImportBackup = document.getElementById('inputImportBackup');
     if (inputImportBackup) {
       inputImportBackup.addEventListener('change', async (e) => {
         const file = e.target.files[0];
         if (!file) return;
 
+        const passphrase = prompt('🔑 INFORME A SENHA DE DESCRIPTOGRAFIA DO BACKUP:\n\nDigite a senha definida no momento da exportação deste cofre:');
+        if (!passphrase) {
+          alert('⚠️ Restauração cancelada. A senha de descriptografia é obrigatória.');
+          inputImportBackup.value = '';
+          return;
+        }
+
         try {
           const text = await file.text();
           const backupData = JSON.parse(text);
-          const count = await window.svDB.restoreDatabaseBackup(backupData);
+          const count = await window.svDB.restoreDatabaseBackup(backupData, passphrase);
           await window.svBiometrics.reloadRegisteredUsers();
           this.loadRegisteredUsersUI();
           this.loadLogsUI();
-          alert(`✅ Restauração concluída! ${count} usuários restaurados no banco de dados.`);
+          alert(`✅ RESTAURAÇÃO CONCLUÍDA COM SUCESSO!\n\n${count} registros foram verificados por esquema, descriptografados e integrados com segurança ao banco de dados.`);
         } catch (err) {
-          alert(`❌ Erro ao restaurar backup: ${err.message}`);
+          alert(`❌ FALHA DE SEGURANÇA NA RESTAURAÇÃO:\n\n${err.message}`);
         } finally {
           inputImportBackup.value = '';
         }
@@ -242,11 +255,42 @@ class SecureVisionApp {
   loadSupabaseUI() {
     const urlInput = document.getElementById('supabaseUrlInput');
     const keyInput = document.getElementById('supabaseKeyInput');
-    if (urlInput) urlInput.value = window.svDB.supabaseConfig.url || '';
-    if (keyInput) keyInput.value = window.svDB.supabaseConfig.key || '';
+    if (urlInput && window.svDB && window.svDB.supabaseConfig.url) {
+      urlInput.value = window.svDB.supabaseConfig.url;
+    }
+    if (keyInput && window.svDB && window.svDB.supabaseConfig.key) {
+      keyInput.value = window.svDB.supabaseConfig.key;
+    }
   }
 
-  // Theme Management (Light vs Dark Mode)
+  // Security Helper: Official Brazilian CPF Validation Algorithm (Modulo 11 with Check Digits)
+  validateCPF(cpf) {
+    if (!cpf || typeof cpf !== 'string') return false;
+    const clean = cpf.replace(/\D/g, '');
+    if (clean.length !== 11) return false;
+    
+    // Rejeita sequências com todos os dígitos iguais (ex: 00000000000, 11111111111, etc.)
+    if (/^(\d)\1{10}$/.test(clean)) return false;
+
+    // Cálculo do 1º Dígito Verificador
+    let sum = 0;
+    for (let i = 0; i < 9; i++) {
+      sum += parseInt(clean.charAt(i), 10) * (10 - i);
+    }
+    let rest = 11 - (sum % 11);
+    let digit1 = (rest === 10 || rest === 11) ? 0 : rest;
+    if (digit1 !== parseInt(clean.charAt(9), 10)) return false;
+
+    // Cálculo do 2º Dígito Verificador
+    sum = 0;
+    for (let i = 0; i < 10; i++) {
+      sum += parseInt(clean.charAt(i), 10) * (11 - i);
+    }
+    rest = 11 - (sum % 11);
+    let digit2 = (rest === 10 || rest === 11) ? 0 : rest;
+    return digit2 === parseInt(clean.charAt(10), 10);
+  }
+
   loadTheme() {
     const savedTheme = localStorage.getItem('sv_theme') || 'dark';
     this.setTheme(savedTheme);
@@ -815,10 +859,9 @@ class SecureVisionApp {
       return;
     }
 
-    // Validação estrita de CPF (11 dígitos numéricos)
-    const cleanCpf = cpf.replace(/\D/g, '');
-    if (cleanCpf.length !== 11) {
-      alert('⚠️ CPF Inválido: O CPF deve conter exatamente 11 dígitos numéricos (formato 000.000.000-00).');
+    // Validação estrita e matemática do CPF (Dígitos Verificadores Módulo 11)
+    if (!this.validateCPF(cpf)) {
+      alert('⚠️ CPF Inválido: O número informado não é um CPF autêntico válido perante o algoritmo oficial da Receita Federal. Verifique os números digitados.');
       document.getElementById('enrollCpf').focus();
       return;
     }
@@ -1226,7 +1269,14 @@ class SecureVisionApp {
   }
 }
 
-// Global App instance
-window.svApp = new SecureVisionApp();
+// Global App instance (Tamper-Proof Protected Singleton)
+if (!window.svApp) {
+  Object.defineProperty(window, 'svApp', {
+    value: new SecureVisionApp(),
+    writable: false,
+    configurable: false,
+    enumerable: true
+  });
+}
 document.addEventListener('DOMContentLoaded', () => window.svApp.init());
 

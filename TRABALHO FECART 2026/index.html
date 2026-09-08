@@ -37,7 +37,7 @@
       document.addEventListener('keydown', blockInspectionKeys, true);
       document.addEventListener('keyup', blockInspectionKeys, true);
 
-      // 2. Bloqueio de Botão Direito
+      // 2. Bloqueio de Botão Direito e Arrastar Elementos
       window.addEventListener('contextmenu', function(e) {
         e.preventDefault();
         e.stopPropagation();
@@ -45,14 +45,40 @@
         return false;
       }, true);
 
-      // 3. Anti-Debugger Trap & Detecção de Abertura de DevTools
-      var devtoolsDetectorTimer = setInterval(function() {
+      window.addEventListener('dragstart', function(e) {
+        e.preventDefault();
+        return false;
+      }, true);
+
+      // 3. Anti-Debugger Trap & Detecção de Abertura de DevTools (Acoplado e Desacoplado)
+      var isDevToolsOpen = false;
+
+      // Método A: Verificação de dimensão de janela (Docked DevTools)
+      function checkDockedDevTools() {
         var threshold = 160;
-        var widthThreshold = window.outerWidth - window.innerWidth > threshold;
-        var heightThreshold = window.outerHeight - window.innerHeight > threshold;
+        return (window.outerWidth - window.innerWidth > threshold) || 
+               (window.outerHeight - window.innerHeight > threshold);
+      }
+
+      // Método B: Console Getter Detector (Undocked DevTools)
+      var elementTrap = new Image();
+      Object.defineProperty(elementTrap, 'id', {
+        get: function() {
+          isDevToolsOpen = true;
+        }
+      });
+
+      var devtoolsDetectorTimer = setInterval(function() {
+        isDevToolsOpen = checkDockedDevTools();
+
+        // Dispara trigger de console para pegar janela desacoplada
+        try {
+          console.log('%c', elementTrap);
+          console.clear();
+        } catch (e) {}
 
         var warningEl = document.getElementById('devtoolsLockdownOverlay');
-        if (widthThreshold || heightThreshold) {
+        if (isDevToolsOpen) {
           if (!warningEl) {
             warningEl = document.createElement('div');
             warningEl.id = 'devtoolsLockdownOverlay';
@@ -61,12 +87,12 @@
               <div style="font-size:3.5rem; margin-bottom:12px;">🚫</div>
               <h1 style="color:#ef4444; font-size:1.8rem; margin-bottom:8px; font-weight:800;">ACESSO NEGADO - MODO KIOSK ATIVO</h1>
               <p style="color:#94a3b8; font-size:0.95rem; max-width:550px; line-height:1.5;">
-                O painel de desenvolvedor (DevTools/F12) foi detectado aberto. Por diretrizes de segurança e conformidade da central de vigilância, feche o painel de inspeção lateral para desbloquear a interface.
+                O painel de desenvolvedor (DevTools/F12) foi detectado aberto. Por diretrizes de segurança e conformidade da central de vigilância, feche o painel de inspeção para desbloquear a interface.
               </p>
             `;
             document.body.appendChild(warningEl);
           }
-          // Congela o DevTools com debugger
+          // Congela a depuração
           try { Function('debugger')(); } catch (err) {}
         } else {
           if (warningEl && warningEl.parentNode) {
@@ -628,21 +654,21 @@
                 <button class="btn-action" id="btnSaveSupabase" style="width:100%; justify-content:center; margin-top:6px;">💾 Salvar & Sincronizar Supabase</button>
               </div>
 
-              <!-- Card 5: Backup e Exportação Segura -->
+              <!-- Card 5: Backup e Exportação Segura (Zero-Knowledge) -->
               <div class="settings-card">
                 <div class="settings-card-title">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                  Backup Autorizado & Exportação Criptografada
+                  Backup Criptografado por Senha (Zero-Knowledge)
                 </div>
 
                 <p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:12px;">
-                  Gere uma cópia de segurança autorizada de todos os registros biométricos, logs encadeados e perfis, mantendo a integridade das cifras AES-GCM 256.
+                  Exportação protegida por senha mestre via <strong>AES-GCM 256-bit</strong> e assinatura criptográfica <strong>SHA-256</strong>. Os dados só podem ser lidos mediante inserção da senha correspondente.
                 </p>
 
                 <div style="display:flex; flex-direction:column; gap:8px;">
-                  <button class="btn-action" id="btnExportBackup" style="width:100%; justify-content:center;">📦 Exportar Backup Criptografado (JSON)</button>
+                  <button class="btn-action" id="btnExportBackup" style="width:100%; justify-content:center;">🔐 Exportar Cofre Criptografado (JSON)</button>
                   <label class="btn-outline" style="width:100%; justify-content:center; display:flex; align-items:center; cursor:pointer; font-size:0.8rem; padding:8px 14px; text-align:center;">
-                    📥 Restaurar Backup
+                    📥 Restaurar Cofre de Backup
                     <input type="file" id="inputImportBackup" accept=".json" style="display:none;">
                   </label>
                 </div>

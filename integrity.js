@@ -116,4 +116,12 @@ class SystemIntegrityMonitor {
   }
 }
 
-window.svIntegrity = new SystemIntegrityMonitor();
+// Global Integrity instance (Tamper-Proof Protected Singleton)
+if (!window.svIntegrity) {
+  Object.defineProperty(window, 'svIntegrity', {
+    value: new SystemIntegrityMonitor(),
+    writable: false,
+    configurable: false,
+    enumerable: true
+  });
+}

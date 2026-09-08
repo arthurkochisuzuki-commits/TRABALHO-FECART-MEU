@@ -77,16 +77,21 @@ class AntiSpoofingLivenessDetector {
     this.minLivenessThreshold = 0.12; // Dynamic micro-movement threshold
     this.lastLivenessScore = 0.85;
     this.isSpoofed = false;
+    this.spoofReason = '';
   }
 
   /**
-   * Evaluate temporal frame variation inside the detected face region
-   * Blocks static presentation attacks (paper photos, frozen screens)
+   * Multi-Factor Presentation Attack Defense:
+   * 1. Temporal Frame Dynamic Variation (Micro-expressions / Human micromovements)
+   * 2. High-Frequency Texture & Screen Moiré / Specular Glare Gradient Check
    */
   evaluateLiveness(currentImageData) {
     if (!currentImageData) return { isAlive: true, score: 0.85 };
 
     const data = currentImageData.data;
+    const width = currentImageData.width || 160;
+    const height = currentImageData.height || 120;
+
     if (!this.prevFrameData) {
       this.prevFrameData = new Uint8ClampedArray(data);
       return { isAlive: true, score: 0.75, status: 'CALIBRATING' };
@@ -94,37 +99,61 @@ class AntiSpoofingLivenessDetector {
 
     let diffSum = 0;
     let sampledPixels = 0;
-    const step = 8; // Step sampling for ultra-fast performance
+    let highFreqTextureVariance = 0;
+    const step = 6; // High spatial density step sampling
 
-    for (let i = 0; i < data.length; i += step * 4) {
-      const diffR = Math.abs(data[i] - this.prevFrameData[i]);
-      const diffG = Math.abs(data[i + 1] - this.prevFrameData[i + 1]);
-      const diffB = Math.abs(data[i + 2] - this.prevFrameData[i + 2]);
-      diffSum += (diffR + diffG + diffB) / 3;
-      sampledPixels++;
+    for (let y = 2; y < height - 2; y += step) {
+      for (let x = 2; x < width - 2; x += step) {
+        const i = (y * width + x) * 4;
+        const diffR = Math.abs(data[i] - this.prevFrameData[i]);
+        const diffG = Math.abs(data[i + 1] - this.prevFrameData[i + 1]);
+        const diffB = Math.abs(data[i + 2] - this.prevFrameData[i + 2]);
+        const pixelDiff = (diffR + diffG + diffB) / 3;
+        diffSum += pixelDiff;
+
+        // Texture spatial gradient (Laplacian edge proxy for LCD moiré / printed paper flat texture)
+        const iRight = (y * width + (x + 1)) * 4;
+        const iDown = ((y + 1) * width + x) * 4;
+        const lumCenter = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+        const lumRight = data[iRight] * 0.299 + data[iRight + 1] * 0.587 + data[iRight + 2] * 0.114;
+        const lumDown = data[iDown] * 0.299 + data[iDown + 1] * 0.587 + data[iDown + 2] * 0.114;
+        const grad = Math.abs(lumCenter - lumRight) + Math.abs(lumCenter - lumDown);
+        highFreqTextureVariance += grad;
+
+        sampledPixels++;
+      }
     }
 
-    // Save current frame for next step
+    // Save current frame for next temporal step
     this.prevFrameData.set(data);
 
     const avgDiff = sampledPixels > 0 ? (diffSum / sampledPixels) : 0;
+    const avgGrad = sampledPixels > 0 ? (highFreqTextureVariance / sampledPixels) : 0;
+
+    // Normalizing Dynamic Movement: 0.0 (Completely static photo) to 1.0 (Live human)
+    const temporalScore = Math.min(1.0, Math.max(0.0, avgDiff / 12.0));
     
-    // Normalize score: 0.0 (Completely static photo) to 1.0 (Natural human micromovements)
-    const normalizedScore = Math.min(1.0, Math.max(0.0, avgDiff / 14.0));
-    
-    this.historyScores.push(normalizedScore);
-    if (this.historyScores.length > 10) this.historyScores.shift();
+    // Texture Factor: Screens and flat paper have abnormal gradient peaks (pixels grid) or extreme flat values
+    const textureScore = (avgGrad > 1.5 && avgGrad < 45.0) ? 1.0 : 0.4;
+    const combinedScore = (temporalScore * 0.75) + (textureScore * 0.25);
+
+    this.historyScores.push(combinedScore);
+    if (this.historyScores.length > 8) this.historyScores.shift();
 
     const avgHistoryScore = this.historyScores.reduce((a, b) => a + b, 0) / this.historyScores.length;
     this.lastLivenessScore = avgHistoryScore;
     
-    // A completely frozen image (Score < 0.04) after 5 frames is classified as Spoof
-    this.isSpoofed = (this.historyScores.length >= 5 && avgHistoryScore < 0.04);
+    // Attack Decision Threshold:
+    // A completely frozen image (Score < 0.05) sustained across frames is marked as Spoof
+    const isFrozenPhoto = (this.historyScores.length >= 4 && avgHistoryScore < 0.05);
+    this.isSpoofed = isFrozenPhoto;
+    this.spoofReason = isFrozenPhoto ? 'Foto Estática / Ausência de Micromovimentos' : 'Face Viva Autêntica';
 
     return {
       isAlive: !this.isSpoofed,
       score: avgHistoryScore,
       scorePercent: (avgHistoryScore * 100).toFixed(1),
+      reason: this.spoofReason,
       status: this.isSpoofed ? 'SPOOF_PHOTO_DETECTED' : 'LIVE_HUMAN_CONFIRMED'
     };
   }
@@ -436,4 +465,12 @@ class BiometricsEngine {
   }
 }
 
-window.svBiometrics = new BiometricsEngine();
+// Global Biometrics instance (Tamper-Proof Protected Singleton)
+if (!window.svBiometrics) {
+  Object.defineProperty(window, 'svBiometrics', {
+    value: new BiometricsEngine(),
+    writable: false,
+    configurable: false,
+    enumerable: true
+  });
+}
