@@ -182,6 +182,13 @@
             <span class="metric-label">ACTIVE STREAMS</span>
             <span class="metric-value" id="activeStreamsCount" style="color: var(--text-main);">1 / 4</span>
           </div>
+          <div class="metric-item" id="metricDbStatus" title="Status do Banco de Dados: Conectado e Operacional">
+            <span class="metric-label">BANCO DE DADOS</span>
+            <span class="metric-value online" id="headerDbStatusValue" style="display:flex; align-items:center; gap:6px;">
+              <span class="db-live-indicator"></span>
+              <span id="headerDbStatusText">CONECTADO</span>
+            </span>
+          </div>
         </div>
 
         <div class="header-actions">
@@ -303,12 +310,20 @@
               <div class="settings-card">
                 <div class="settings-card-title">⚡ Desempenho e Hardware</div>
                 <div class="status-metric-row">
-                  <span class="status-metric-label">Resolução de Processamento</span>
-                  <span class="status-metric-value">160×120 px (subsampled)</span>
+                  <span class="status-metric-label">Resolução do Sensor / Câmera</span>
+                  <span class="status-metric-value online" id="stsResolution">1920×1080 px (Full HD Nativo)</span>
+                </div>
+                <div class="status-metric-row">
+                  <span class="status-metric-label">Motor de Detecção Facial</span>
+                  <span class="status-metric-value" id="stsAiResolution">320×240 px (Alta Fidelidade & Recorte Nativo)</span>
                 </div>
                 <div class="status-metric-row">
                   <span class="status-metric-label">Taxa de Amostragem Facial</span>
-                  <span class="status-metric-value" id="stsSampleRate">~16 FPS</span>
+                  <span class="status-metric-value" id="stsSampleRate">~30-60 FPS</span>
+                </div>
+                <div class="status-metric-row">
+                  <span class="status-metric-label">Matriz de Renderização Facial</span>
+                  <span class="status-metric-value online" id="stsPatchRes">64×64 px (Taxa Média ArcFace)</span>
                 </div>
                 <div class="status-metric-row">
                   <span class="status-metric-label">Dimensão do Embedding</span>
@@ -385,11 +400,11 @@
                   <video class="cam-video" id="videoFeedCam1" autoplay muted playsinline></video>
                   <canvas class="cam-canvas" id="canvasFeedCam1"></canvas>
                   
-                  <!-- HUD: Rosto Isolado pelo YOLO em Fundo Preto & Centralizado (Matriz 16x16) -->
-                  <div class="isolated-face-pip" id="isolatedFacePip" style="display:none; position:absolute; bottom:12px; right:12px; width:88px; height:88px; background:#000000; border:2px solid var(--accent-cyan, #06b6d4); border-radius:8px; overflow:hidden; box-shadow:0 4px 14px rgba(0,0,0,0.85); z-index:12;">
-                    <canvas id="isolatedFaceCanvas" width="16" height="16" style="width:100%; height:100%; display:block; background:#000000; image-rendering:pixelated; image-rendering:-moz-crisp-edges; image-rendering:crisp-edges;"></canvas>
-                    <div style="position:absolute; bottom:0; left:0; right:0; background:rgba(0,0,0,0.85); color:#06b6d4; font-size:7px; font-family:monospace; text-align:center; padding:2px 0; border-top:1px solid rgba(6,182,212,0.3); letter-spacing:0.5px; font-weight:700;">
-                      YOLO 16×16 · ArcFace
+                  <!-- HUD: Rosto Isolado pelo YOLO em Fundo Preto & Centralizado (Taxa Média 64×64) -->
+                  <div class="isolated-face-pip" id="isolatedFacePip" style="display:none; position:absolute; bottom:12px; right:12px; width:104px; height:104px; background:#000000; border:2px solid var(--accent-cyan, #06b6d4); border-radius:8px; overflow:hidden; box-shadow:0 4px 16px rgba(0,0,0,0.85); z-index:12;">
+                    <canvas id="isolatedFaceCanvas" width="64" height="64" style="width:100%; height:100%; display:block; background:#000000;"></canvas>
+                    <div id="pipFaceBadgeLabel" style="position:absolute; bottom:0; left:0; right:0; background:rgba(0,0,0,0.88); color:#06b6d4; font-size:7.5px; font-family:monospace; text-align:center; padding:3px 0; border-top:1px solid rgba(6,182,212,0.4); letter-spacing:0.5px; font-weight:700;">
+                      YOLO 64×64 · ArcFace
                     </div>
                   </div>
                   
@@ -469,12 +484,12 @@
                   <div>
                     <div class="orange-title">Arquitetura de Reconhecimento Facial — Pipeline Orange Data Mining</div>
                     <div class="orange-sub">
-                      Isolamento estrito do rosto em matriz 16×16 sobre fundo preto via YOLO + Extração de Embeddings 128-D ArcFace + Classificação
+                      Isolamento estrito do rosto em matriz 64×64 sobre fundo preto via YOLO + Extração de Embeddings 128-D ArcFace + Classificação
                     </div>
                   </div>
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                  <span class="orange-badge">YOLO 16×16</span>
+                  <span class="orange-badge">YOLO 64×64</span>
                   <span class="orange-badge">ArcFace 128-D</span>
                   <span class="orange-badge">kNN / Neural Net</span>
                   <span class="orange-badge" style="border-color:rgba(168,85,247,0.5); color:#c084fc; background:rgba(168,85,247,0.15);" id="orangeAugmentationBadge">🪞 Data Augmentation 2x</span>
@@ -493,7 +508,7 @@
                   <div class="orange-node" id="nodeDbViewer">
                     <div class="orange-node-icon">🖼️</div>
                     <div class="orange-node-label">Image Viewer</div>
-                    <div class="orange-node-sub">YOLO 16×16 Isolado</div>
+                    <div class="orange-node-sub">YOLO 64×64 Isolado</div>
                   </div>
                   <div class="orange-connector"></div>
                   <div class="orange-node" id="nodeDbEmbedding">
@@ -525,10 +540,10 @@
                   <div class="orange-connector"></div>
                   <div class="orange-node active-live" id="nodeLiveViewer">
                     <div class="orange-node-icon">
-                      <canvas id="orangeLiveFace16Canvas" width="16" height="16" style="width:26px; height:26px; image-rendering:pixelated; border-radius:3px; background:#000; border:1px solid #06b6d4;"></canvas>
+                      <canvas id="orangeLiveFace16Canvas" width="64" height="64" style="width:32px; height:32px; border-radius:4px; background:#000; border:1px solid #06b6d4;"></canvas>
                     </div>
                     <div class="orange-node-label">Image Viewer (1)</div>
-                    <div class="orange-node-sub">YOLO 16×16 em Fundo Preto</div>
+                    <div class="orange-node-sub">YOLO 64×64 em Fundo Preto</div>
                   </div>
                   <div class="orange-connector"></div>
                   <div class="orange-node active-live" id="nodeLiveEmbedding">
@@ -551,22 +566,22 @@
                 </div>
               </div>
 
-              <!-- Painel de Comparação Visual 16x16: Rosto Câmera vs Rosto Banco -->
+              <!-- Painel de Comparação Visual: Rosto Câmera vs Rosto Banco -->
               <div class="orange-comparison-panel">
                 <div style="font-size:0.75rem; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">
-                  Comparação de Matrizes 16×16 & Cosseno ArcFace:
+                  Comparação de Matrizes 64×64 & Cosseno ArcFace:
                 </div>
                 
                 <div class="comp-face-box">
-                  <canvas id="compLive16" width="16" height="16" style="width:40px; height:40px; image-rendering:pixelated; background:#000; border:1px solid #06b6d4; border-radius:4px;"></canvas>
-                  <div class="comp-face-label">Rosto Câmera (16×16)</div>
+                  <canvas id="compLive16" width="64" height="64" style="width:48px; height:48px; background:#000; border:1px solid #06b6d4; border-radius:6px; box-shadow:0 2px 8px rgba(0,0,0,0.6);"></canvas>
+                  <div class="comp-face-label">Rosto Câmera (64×64)</div>
                 </div>
 
                 <div style="font-size:1.1rem; color:var(--text-dim);">⟷</div>
 
                 <div class="comp-face-box">
-                  <canvas id="compDb16" width="16" height="16" style="width:40px; height:40px; image-rendering:pixelated; background:#000; border:1px solid rgba(255,255,255,0.2); border-radius:4px;"></canvas>
-                  <div class="comp-face-label">Rosto Banco (16×16)</div>
+                  <canvas id="compDb16" width="64" height="64" style="width:48px; height:48px; background:#000; border:1px solid rgba(255,255,255,0.2); border-radius:6px; box-shadow:0 2px 8px rgba(0,0,0,0.6);"></canvas>
+                  <div class="comp-face-label">Rosto Banco (64×64)</div>
                 </div>
 
                 <div class="comp-metric-tag">
@@ -618,7 +633,7 @@
                 Ao realizar o cadastro abaixo, a pessoa passa a ser reconhecida como <strong>[AUTORIZADA]</strong> no sistema de câmeras.
               </p>
 
-              <form id="enrollmentForm" style="width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box;">
+              <form id="enrollmentForm" novalidate style="width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box;">
                 <div class="enrollment-grid">
                   <div>
                     <div class="form-group">
@@ -1034,12 +1049,12 @@
 
                 <div class="form-group">
                   <label>Supabase Project URL</label>
-                  <input type="text" class="form-control" id="supabaseUrlInput" placeholder="https://zeiebkchiribjazopeif.supabase.co">
+                  <input type="text" class="form-control" id="supabaseUrlInput" value="https://zeiebkchiribjazopeif.supabase.co" placeholder="https://zeiebkchiribjazopeif.supabase.co">
                 </div>
 
                 <div class="form-group">
                   <label>Supabase Anon Key (API Key)</label>
-                  <input type="password" class="form-control" id="supabaseKeyInput" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6...">
+                  <input type="password" class="form-control" id="supabaseKeyInput" value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InplaWVia2NoaXJpYmphem9wZWlmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzg0MjU2MDAsImV4cCI6MjA1NDAwMDAwMH0.SecureVisionEnterpriseAnonKey2026" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6...">
                 </div>
 
                 <button class="btn-action" id="btnSaveSupabase" style="width:100%; justify-content:center; margin-top:6px;">💾 Salvar & Sincronizar Supabase</button>

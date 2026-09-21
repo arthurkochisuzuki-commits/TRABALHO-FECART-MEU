@@ -899,6 +899,22 @@ body {
   font-family: var(--font-mono);
 }
 
+.db-live-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #10b981;
+  display: inline-block;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
+  animation: pulse-green 2s infinite ease-in-out;
+}
+
+@keyframes pulse-green {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.25); opacity: 1; box-shadow: 0 0 12px rgba(16, 185, 129, 0.95); }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
 .timeline-event {
   display: flex;
   align-items: center;

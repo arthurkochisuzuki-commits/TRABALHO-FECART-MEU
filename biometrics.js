@@ -308,7 +308,8 @@ class YOLOFaceDetectorEngine {
       }
     }
 
-    const hasPresence = skinPixels >= this.minSkinPixels;
+    const minRequired = (width >= 320) ? Math.max(30, Math.round(this.minSkinPixels * 1.5)) : this.minSkinPixels;
+    const hasPresence = skinPixels >= minRequired;
     return { hasPresence, skinPixels, totalSampled };
   }
 
@@ -781,7 +782,11 @@ class BiometricsEngine {
     this.lastMatchResult = { matched: false, label: 'Pessoa não cadastrada', confidence: 0 };
     this.simulatedMode = 'auto';
 
-    // Offscreen helper canvases
+    // Offscreen helper canvases, high-resolution detection buffer and medium-rate face patch (64×64)
+    this.detectionWidth = 320;
+    this.detectionHeight = 240;
+    this.facePatchSize = 64; // Taxa de pixels média (64×64) para renderização rápida e alta distinção facial
+    this.canvasMap = {};
     this.offscreenCanvas = null;
     this.isolatedFaceCanvas = null;
     this.tempFaceCanvas = null;
@@ -818,16 +823,18 @@ class BiometricsEngine {
 
   calibrateBackground(video) {
     if (!video || video.readyState < 2) return false;
+    const dw = this.detectionWidth || 320;
+    const dh = this.detectionHeight || 240;
     if (!this.offscreenCanvas) {
       this.offscreenCanvas = document.createElement('canvas');
     }
-    this.offscreenCanvas.width = 160;
-    this.offscreenCanvas.height = 120;
+    this.offscreenCanvas.width = dw;
+    this.offscreenCanvas.height = dh;
     const ctx = this.offscreenCanvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, 160, 120);
-    const frame = ctx.getImageData(0, 0, 160, 120);
+    ctx.drawImage(video, 0, 0, dw, dh);
+    const frame = ctx.getImageData(0, 0, dw, dh);
     this.backgroundModel = new Uint8ClampedArray(frame.data);
-    console.log('[Biometrics] Fundo calibrado para o detector.');
+    console.log(`[Biometrics] Fundo calibrado em alta resolução (${dw}×${dh}) para o detector.`);
     return true;
   }
 
@@ -938,10 +945,11 @@ class BiometricsEngine {
             height: Math.round(h * 0.72)
           };
           const paddedBox = this.canonicalizeFaceBox(box, w, h);
-          const { canvas: isolated16, dataUrl: patch16Url } = this.isolateFaceSquare16x16(ctx, paddedBox, true);
-          const desc = this.extractFaceDescriptor(isolated16);
+          const { canvas: isolatedFace, dataUrl: patchUrl } = this.isolateFaceSquare(ctx, paddedBox, true, this.facePatchSize || 64);
+          const desc = this.extractFaceDescriptor(isolatedFace);
           if (desc) {
-            desc.facePatch16x16 = patch16Url;
+            desc.facePatch = patchUrl;
+            desc.facePatch16x16 = patchUrl;
             desc.box = paddedBox;
           }
           resolve(desc);
@@ -1018,7 +1026,7 @@ class BiometricsEngine {
    * Aplica acolchoamento proporcional rigoroso (+10% largura, +15% altura)
    * garantindo 100% de consistência entre fotos de cadastro, arquivos e vídeo ao vivo.
    */
-  canonicalizeFaceBox(rawBox, frameW = 160, frameH = 120) {
+  canonicalizeFaceBox(rawBox, frameW = 320, frameH = 240) {
     if (!rawBox) return null;
     const padX = rawBox.width * 0.10;
     const padY = rawBox.height * 0.15;
@@ -1038,23 +1046,29 @@ class BiometricsEngine {
 
   /**
    * Stage 3: Strict Face Isolation onto Pure Black Background (#000000)
-   * in canonical 16 x 16 squares via YOLO
+   * Supports configurable canonical square (Default: 64×64 medium rate for optimal recognition and distinguishing faces)
+   * Supports CanvasRenderingContext2D, HTMLCanvasElement, and HTMLVideoElement at full native resolution
    */
-  isolateFaceSquare16x16(sourceCtx, faceBox, exportDataUrl = false) {
-    if (!this.canvas16x16) {
-      this.canvas16x16 = document.createElement('canvas');
-      this.canvas16x16.width = 16;
-      this.canvas16x16.height = 16;
+  isolateFaceSquare(sourceCtx, faceBox, exportDataUrl = false, targetSize = 64) {
+    targetSize = targetSize || this.facePatchSize || 64;
+    if (!this.canvasMap) this.canvasMap = {};
+    if (!this.canvasMap[targetSize]) {
+      const c = document.createElement('canvas');
+      c.width = targetSize;
+      c.height = targetSize;
+      this.canvasMap[targetSize] = c;
     }
-    const ctx16 = this.canvas16x16.getContext('2d', { willReadFrequently: true });
+    const canvas = this.canvasMap[targetSize];
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
     // 1. Preenche 100% com Fundo Preto Puro (#000000)
-    ctx16.fillStyle = '#000000';
-    ctx16.fillRect(0, 0, 16, 16);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, targetSize, targetSize);
 
-    const srcW = sourceCtx.canvas ? sourceCtx.canvas.width : (sourceCtx.width || 160);
-    const srcH = sourceCtx.canvas ? sourceCtx.canvas.height : (sourceCtx.height || 120);
-    const srcCanvas = sourceCtx.canvas || sourceCtx;
+    const isVideo = (typeof HTMLVideoElement !== 'undefined' && sourceCtx instanceof HTMLVideoElement) || (sourceCtx && sourceCtx.videoWidth !== undefined && sourceCtx.videoWidth > 0);
+    const srcW = isVideo ? sourceCtx.videoWidth : (sourceCtx.canvas ? sourceCtx.canvas.width : (sourceCtx.width || 320));
+    const srcH = isVideo ? sourceCtx.videoHeight : (sourceCtx.canvas ? sourceCtx.canvas.height : (sourceCtx.height || 240));
+    const srcCanvas = isVideo ? sourceCtx : (sourceCtx.canvas || sourceCtx);
 
     // Garante que o recorte utilize sempre o enquadramento canônico idêntico
     const effBox = (faceBox.isCanonical || faceBox.rawBox) ? faceBox : (this.canonicalizeFaceBox(faceBox, srcW, srcH) || faceBox);
@@ -1113,9 +1127,9 @@ class BiometricsEngine {
     }
     tempCtx.putImageData(faceImgData, 0, 0);
 
-    // 3. Centraliza e dimensiona estritamente no canvas quadrado de 16x16 pixels
-    const destH = 14;
-    const destW = Math.max(8, Math.min(14, Math.round(destH * (bw / bh))));
+    // 3. Centraliza e dimensiona no canvas quadrado canônico
+    const destH = Math.round(targetSize * 0.88);
+    const destW = Math.max(Math.round(targetSize * 0.50), Math.min(destH, Math.round(destH * (bw / bh))));
 
     // Alinhamento dinâmico pelo centro de massa facial para cancelar jitter de sub-pixel
     const comX = massCount > 0 ? massX / massCount : bw / 2;
@@ -1123,46 +1137,36 @@ class BiometricsEngine {
     const shiftX = Math.round(((bw / 2) - comX) * (destW / bw));
     const shiftY = Math.round(((bh * 0.48) - comY) * (destH / bh));
 
-    const destX = Math.max(0, Math.min(16 - destW, Math.round((16 - destW) / 2) + shiftX));
-    const destY = Math.max(0, Math.min(16 - destH, Math.round((16 - destH) / 2) + shiftY));
+    const destX = Math.max(0, Math.min(targetSize - destW, Math.round((targetSize - destW) / 2) + shiftX));
+    const destY = Math.max(0, Math.min(targetSize - destH, Math.round((targetSize - destH) / 2) + shiftY));
 
-    ctx16.drawImage(this.tempFaceCanvas, 0, 0, bw, bh, destX, destY, destW, destH);
+    ctx.drawImage(this.tempFaceCanvas, 0, 0, bw, bh, destX, destY, destW, destH);
 
-    // Otimização Crítica: toDataURL é executado APENAS sob demanda explícita (economiza 35%+ CPU)
+    // Otimização: toDataURL é executado sob demanda explícita
     let dataUrl = null;
     if (exportDataUrl) {
       try {
-        dataUrl = this.canvas16x16.toDataURL('image/png');
+        dataUrl = canvas.toDataURL('image/png');
       } catch (e) {
         dataUrl = null;
       }
     }
 
     return {
-      canvas: this.canvas16x16,
+      canvas: canvas,
       dataUrl: dataUrl
     };
   }
 
+  isolateFaceSquare16x16(sourceCtx, faceBox, exportDataUrl = false) {
+    return this.isolateFaceSquare(sourceCtx, faceBox, exportDataUrl, 16);
+  }
+
   /**
-   * Stage 3 Legacy/Convenience Bridge: retorna o canvas quadrado 16x16
+   * Stage 3 Legacy/Convenience Bridge
    */
-  isolateAndCenterFace(sourceCtx, faceBox, targetSize = 16) {
-    if (targetSize === 16) {
-      return this.isolateFaceSquare16x16(sourceCtx, faceBox).canvas;
-    }
-    if (!this.isolatedFaceCanvas) {
-      this.isolatedFaceCanvas = document.createElement('canvas');
-    }
-    this.isolatedFaceCanvas.width = targetSize;
-    this.isolatedFaceCanvas.height = targetSize;
-    const ctx = this.isolatedFaceCanvas.getContext('2d');
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(0, 0, targetSize, targetSize);
-    const sq = this.isolateFaceSquare16x16(sourceCtx, faceBox).canvas;
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(sq, 0, 0, 16, 16, 0, 0, targetSize, targetSize);
-    return this.isolatedFaceCanvas;
+  isolateAndCenterFace(sourceCtx, faceBox, targetSize = 64) {
+    return this.isolateFaceSquare(sourceCtx, faceBox, false, targetSize).canvas;
   }
 
   detectFaceInVideo(video, canvas) {
@@ -1170,19 +1174,25 @@ class BiometricsEngine {
       return null;
     }
 
+    const detW = this.detectionWidth || 320;
+    const detH = this.detectionHeight || 240;
+
     if (!this.offscreenCanvas) {
       this.offscreenCanvas = document.createElement('canvas');
-      this.offscreenCanvas.width = 160;
-      this.offscreenCanvas.height = 120;
+      this.offscreenCanvas.width = detW;
+      this.offscreenCanvas.height = detH;
+    } else if (this.offscreenCanvas.width !== detW || this.offscreenCanvas.height !== detH) {
+      this.offscreenCanvas.width = detW;
+      this.offscreenCanvas.height = detH;
     }
     const offCtx = this.offscreenCanvas.getContext('2d');
-    offCtx.drawImage(video, 0, 0, 160, 120);
+    offCtx.drawImage(video, 0, 0, detW, detH);
 
-    const imgData = offCtx.getImageData(0, 0, 160, 120);
+    const imgData = offCtx.getImageData(0, 0, detW, detH);
     const data = imgData.data;
 
     // STEP 1: Pre-scan if anyone is on screen
-    const presence = this.yolo.scanForPresence(data, 160, 120, this.backgroundModel);
+    const presence = this.yolo.scanForPresence(data, detW, detH, this.backgroundModel);
     this.lastDetectedPixels = presence.skinPixels;
 
     if (!presence.hasPresence) {
@@ -1204,16 +1214,16 @@ class BiometricsEngine {
       };
     }
 
-    // Pass previous tracked box in 160x120 coordinates for temporal hysteresis
-    const prevTrackedBox160 = this.smoothedBox ? {
-      x: this.smoothedBox.x * 160 / canvas.width,
-      y: this.smoothedBox.y * 120 / canvas.height,
-      width: this.smoothedBox.width * 160 / canvas.width,
-      height: this.smoothedBox.height * 120 / canvas.height
+    // Pass previous tracked box in detection coordinates for temporal hysteresis
+    const prevTrackedBox = this.smoothedBox ? {
+      x: this.smoothedBox.x * detW / canvas.width,
+      y: this.smoothedBox.y * detH / canvas.height,
+      width: this.smoothedBox.width * detW / canvas.width,
+      height: this.smoothedBox.height * detH / canvas.height
     } : null;
 
     // STEP 2: Utilize YOLOv5 to verify human faces and pick strictly the closest person
-    const yoloResult = this.yolo.detectHumanFace(data, 160, 120, prevTrackedBox160);
+    const yoloResult = this.yolo.detectHumanFace(data, detW, detH, prevTrackedBox);
 
     if (!yoloResult || !yoloResult.isHumanFace) {
       this.consecutiveLostFrames++;
@@ -1237,8 +1247,8 @@ class BiometricsEngine {
     this.consecutiveLostFrames = 0;
     const rawBox = yoloResult.box; // Strictly the closest person to the camera!
 
-    const scaleX = canvas.width / 160;
-    const scaleY = canvas.height / 120;
+    const scaleX = canvas.width / detW;
+    const scaleY = canvas.height / detH;
 
     const targetW = Math.max(32, Math.min(canvas.width, rawBox.width * scaleX));
     const targetH = Math.max(38, Math.min(canvas.height, rawBox.height * scaleY));
@@ -1278,15 +1288,26 @@ class BiometricsEngine {
       this.smoothedBox.secondaryFaces = targetBox.secondaryFaces;
     }
 
-    // STEP 3: Isolate face strictly in canonical 16x16 square via YOLO (#000000) for the closest person!
-    const paddedBox = this.canonicalizeFaceBox(rawBox, 160, 120);
-    // exportDataUrl = false evita custo síncrono de conversão base64 a cada frame
-    const { canvas: isolatedCanvas16, dataUrl: patch16Url } = this.isolateFaceSquare16x16(offCtx, paddedBox, false);
+    // STEP 3: Isolate face in canonical square via YOLO (#000000) at medium resolution (64×64) for human visual distinction & speed!
+    const vW = (video && video.videoWidth > 0) ? video.videoWidth : detW;
+    const vH = (video && video.videoHeight > 0) ? video.videoHeight : detH;
+    const scaleVideoX = vW / detW;
+    const scaleVideoY = vH / detH;
+    const videoFaceBox = {
+      x: rawBox.x * scaleVideoX,
+      y: rawBox.y * scaleVideoY,
+      width: rawBox.width * scaleVideoX,
+      height: rawBox.height * scaleVideoY
+    };
+    const paddedBox = this.canonicalizeFaceBox(videoFaceBox, vW, vH);
+    // Crop directly at medium resolution (64×64) for high speed and distinguishable human facial features
+    const patchSize = this.facePatchSize || 64;
+    const { canvas: isolatedCanvas, dataUrl: patchUrl } = this.isolateFaceSquare(video, paddedBox, false, patchSize);
 
     // STEP 4 & 5: Periodic ArcFace / Face IA Recognition & Temporal Tracker
     if (Date.now() - this.lastProcessTime >= this.processIntervalMs) {
       this.lastProcessTime = Date.now();
-      const currentDescriptor = this.extractFaceDescriptor(isolatedCanvas16);
+      const currentDescriptor = this.extractFaceDescriptor(isolatedCanvas);
       const rawMatch = this.matchFaceArcFaceRaw(currentDescriptor);
 
       // Apply Temporal Stabilization to eliminate identity flipping!
@@ -1300,8 +1321,9 @@ class BiometricsEngine {
     return {
       box: this.smoothedBox,
       match: this.lastMatchResult,
-      isolatedFaceCanvas: isolatedCanvas16,
-      facePatch16x16: patch16Url
+      isolatedFaceCanvas: isolatedCanvas,
+      facePatch: patchUrl,
+      facePatch16x16: patchUrl
     };
   }
 
@@ -1828,40 +1850,30 @@ class BiometricsEngine {
    * Formatted strictly as requested: Orange Data Mining Image Embedding Pipeline
    */
   extractFaceDescriptor(isolatedCanvas) {
-    let canvas16 = isolatedCanvas;
-    if (!isolatedCanvas || isolatedCanvas.width !== 16 || isolatedCanvas.height !== 16) {
-      if (!this.resample16Canvas) {
-        this.resample16Canvas = document.createElement('canvas');
-        this.resample16Canvas.width = 16;
-        this.resample16Canvas.height = 16;
-      }
-      const rctx = this.resample16Canvas.getContext('2d', { willReadFrequently: true });
-      rctx.fillStyle = '#000000';
-      rctx.fillRect(0, 0, 16, 16);
-      if (isolatedCanvas) {
-        rctx.drawImage(isolatedCanvas, 0, 0, isolatedCanvas.width, isolatedCanvas.height, 0, 0, 16, 16);
-      }
-      canvas16 = this.resample16Canvas;
-    }
+    if (!isolatedCanvas) return this.arcFace.l2Normalize(new Float32Array(128));
 
-    const ctx = canvas16.getContext('2d', { willReadFrequently: true });
-    const imgData = ctx.getImageData(0, 0, 16, 16);
-    const mainDesc = this.extractDescriptorFrom16x16(imgData.data, 16, 16);
+    const w = isolatedCanvas.width || 64;
+    const h = isolatedCanvas.height || 64;
+    const ctx = isolatedCanvas.getContext('2d', { willReadFrequently: true });
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const mainDesc = this.extractDescriptorFromFacePatch(imgData.data, w, h);
     const normMain = this.arcFace.l2Normalize(mainDesc);
 
-    // Multi-alinhamento adaptativo (+/-1 px de tolerância a micro-vibrações de webcam)
+    // Multi-alinhamento adaptativo para cancelamento de jitter de webcam
     const candidates = [normMain];
+    const shiftStep = Math.max(1, Math.round(w / 16));
+    const shifts = [[-shiftStep, 0], [shiftStep, 0], [0, -shiftStep], [0, shiftStep]];
     const data = imgData.data;
-    const shifts = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+
     for (const [sx, sy] of shifts) {
-      const shifted = new Uint8ClampedArray(16 * 16 * 4);
-      for (let y = 0; y < 16; y++) {
-        for (let x = 0; x < 16; x++) {
+      const shifted = new Uint8ClampedArray(w * h * 4);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
           const srcX = x - sx;
           const srcY = y - sy;
-          if (srcX >= 0 && srcX < 16 && srcY >= 0 && srcY < 16) {
-            const sI = (srcY * 16 + srcX) * 4;
-            const dI = (y * 16 + x) * 4;
+          if (srcX >= 0 && srcX < w && srcY >= 0 && srcY < h) {
+            const sI = (srcY * w + srcX) * 4;
+            const dI = (y * w + x) * 4;
             shifted[dI] = data[sI];
             shifted[dI + 1] = data[sI + 1];
             shifted[dI + 2] = data[sI + 2];
@@ -1869,11 +1881,58 @@ class BiometricsEngine {
           }
         }
       }
-      candidates.push(this.arcFace.l2Normalize(this.extractDescriptorFrom16x16(shifted, 16, 16)));
+      candidates.push(this.arcFace.l2Normalize(this.extractDescriptorFromFacePatch(shifted, w, h)));
     }
     normMain.candidateDescriptors = candidates;
 
     return normMain;
+  }
+
+  /**
+   * Extração de vetor 128-D a partir de matriz facial quadrada isolada (ex: 64×64 ou 16×16)
+   * Suporta matrizes de média resolução (64×64) e preserva compatibilidade matemática completa
+   */
+  extractDescriptorFromFacePatch(data, w = 64, h = 64) {
+    if (w === 16 && h === 16) {
+      return this.extractDescriptorFrom16x16(data, 16, 16);
+    }
+    if (data && typeof data.getContext === 'function') {
+      const ctx = data.getContext('2d', { willReadFrequently: true });
+      data = ctx.getImageData(0, 0, w, h).data;
+    }
+    if (!data) return new Float32Array(128);
+
+    const blockW = w / 16;
+    const blockH = h / 16;
+    const data16 = new Uint8ClampedArray(16 * 16 * 4);
+
+    for (let y16 = 0; y16 < 16; y16++) {
+      const startY = Math.floor(y16 * blockH);
+      const endY = Math.floor((y16 + 1) * blockH);
+      for (let x16 = 0; x16 < 16; x16++) {
+        const startX = Math.floor(x16 * blockW);
+        const endX = Math.floor((x16 + 1) * blockW);
+        let sumR = 0, sumG = 0, sumB = 0, sumA = 0, count = 0;
+        for (let py = startY; py < endY; py++) {
+          for (let px = startX; px < endX; px++) {
+            const idx = (py * w + px) * 4;
+            sumR += data[idx];
+            sumG += data[idx + 1];
+            sumB += data[idx + 2];
+            sumA += data[idx + 3];
+            count++;
+          }
+        }
+        const dIdx = (y16 * 16 + x16) * 4;
+        const norm = count || 1;
+        data16[dIdx] = Math.round(sumR / norm);
+        data16[dIdx + 1] = Math.round(sumG / norm);
+        data16[dIdx + 2] = Math.round(sumB / norm);
+        data16[dIdx + 3] = Math.round(sumA / norm);
+      }
+    }
+
+    return this.extractDescriptorFrom16x16(data16, 16, 16);
   }
 
   /**
@@ -2246,10 +2305,11 @@ class BiometricsEngine {
     }
 
     const paddedBox = this.canonicalizeFaceBox(box, w, h);
-    const { canvas: isolated16, dataUrl: patch16Url } = this.isolateFaceSquare16x16(ctx, paddedBox, true);
-    const descriptor = this.extractFaceDescriptor(isolated16);
+    const { canvas: isolatedFace, dataUrl: patchUrl } = this.isolateFaceSquare(ctx, paddedBox, true, this.facePatchSize || 64);
+    const descriptor = this.extractFaceDescriptor(isolatedFace);
     if (descriptor) {
-      descriptor.facePatch16x16 = patch16Url;
+      descriptor.facePatch = patchUrl;
+      descriptor.facePatch16x16 = patchUrl;
       descriptor.box = paddedBox;
     }
     return descriptor;
